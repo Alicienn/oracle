@@ -11,14 +11,8 @@ pub type Result<T> = std::result::Result<T, OracleError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OracleError {
-    #[error("no project with id {0}")]
-    ProjectNotFound(String),
-
     #[error("{0} has no local target configured")]
     NoLocalTarget(String),
-
-    #[error("{0} has no remote target configured")]
-    NoRemoteTarget(String),
 
     #[error("{0} is already running")]
     AlreadyRunning(String),
@@ -34,9 +28,6 @@ pub enum OracleError {
 
     #[error("could not start the process: {0}")]
     SpawnFailed(String),
-
-    #[error("could not stop the process: {0}")]
-    StopFailed(String),
 
     #[error("could not read or write the configuration")]
     Config(#[source] std::io::Error),
@@ -68,15 +59,12 @@ impl OracleError {
     /// Stable identifier the frontend can branch on. Never changes once shipped.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::ProjectNotFound(_) => "project_not_found",
             Self::NoLocalTarget(_) => "no_local_target",
-            Self::NoRemoteTarget(_) => "no_remote_target",
             Self::AlreadyRunning(_) => "already_running",
             Self::NotRunning(_) => "not_running",
             Self::EmptyCommand => "empty_command",
             Self::MissingWorkingDir(_) => "missing_working_dir",
             Self::SpawnFailed(_) => "spawn_failed",
-            Self::StopFailed(_) => "stop_failed",
             Self::Config(_) => "config_io",
             Self::ConfigParse(_) => "config_parse",
             Self::Io { .. } => "io",

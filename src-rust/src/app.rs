@@ -112,6 +112,10 @@ pub struct Oracle {
     needs_frame: bool,
     /// Set by the close button; acted on once the frame it was clicked in has finished.
     closing: bool,
+
+    /// Shown once when the config could not be read and had to be moved aside. Losing a
+    /// project list silently is exactly the failure worth interrupting someone for.
+    notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +175,13 @@ impl Default for Oracle {
     fn default() -> Self {
         let loaded = config::load();
         probe("after config load");
+
+        let notice = loaded.recovered_from.as_ref().map(|path| {
+            format!(
+                "The configuration could not be read and was moved to {}. Oracle started with defaults.",
+                path.display()
+            )
+        });
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -242,6 +253,7 @@ impl Default for Oracle {
             last_frame: Instant::now(),
             needs_frame: true,
             closing: false,
+            notice,
         }
     }
 }
@@ -424,6 +436,10 @@ impl Oracle {
 
         if detail_width > 1.0 {
             self.detail_pane(width - detail_width, body_top, detail_width, body_height, dt);
+        }
+
+        if self.notice.is_some() {
+            self.notice_banner(width, dt);
         }
 
         // Separators last, so they sit above the panels they divide.
@@ -957,7 +973,9 @@ impl Oracle {
 
         match self.tab {
             Tab::Overview => self.overview_tab(&project, inner, body_y, content_width, dt),
-            Tab::Logs => self.logs_tab(&project, inner, body_y, content_width, body_height),
+            Tab::Logs => {
+                self.logs_tab(&project, inner, body_y, content_width, body_height, dt)
+            }
             Tab::Metrics => self.metrics_tab(&project, inner, body_y, content_width),
             Tab::Git => self.git_tab(&project, inner, body_y, content_width),
         }
@@ -1044,7 +1062,11 @@ impl Oracle {
             rows.push(("Health check".into(), remote.url.clone()));
             rows.push((
                 "Remote".into(),
-                describe_remote(self.remote.get(&project.id)),
+                describe_remote(
+                    self.remote
+                        .get(&project.id)
+                        .unwrap_or(&crate::core::remote::RemoteStatus::Unchecked),
+                ),
             ));
         }
         if let Some(repo) = &project.repo {
@@ -1063,9 +1085,52 @@ impl Oracle {
         }
     }
 
-    fn logs_tab(&mut self, project: &Project, x: f32, y: f32, width: f32, height: f32) {
+    fn logs_tab(&mut self, project: &Project, x: f32, y: f32, width: f32, height: f32, dt: f32) {
         let palette = self.palette;
         let lines = self.runner.logs(&project.id, None);
+
+        // Bar first, so the stream below it knows how much room it has.
+        let count = lines.len();
+        self.frame.label(
+            format!("{count} line{}", if count == 1 { "" } else { "s" }),
+            x,
+            y,
+            text::SM,
+            palette.muted,
+        );
+
+        let (copy, clear) = {
+            let mut ui = self.ui(dt);
+            let copy = ui.button(
+                "log-copy",
+                [x + width - 150.0, y - 6.0, 70.0, 28.0],
+                "Copy",
+                Weight::Secondary,
+            );
+            let clear = ui.button(
+                "log-clear",
+                [x + width - 74.0, y - 6.0, 74.0, 28.0],
+                "Clear",
+                Weight::Secondary,
+            );
+            (copy, clear)
+        };
+
+        if copy {
+            let joined: String = lines
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\r\n");
+            copy_to_clipboard(&joined);
+        }
+        if clear {
+            self.runner.clear_logs(&project.id);
+            return;
+        }
+
+        let y = y + 30.0;
+        let height = height - 30.0;
 
         if lines.is_empty() {
             let message = if matches!(self.status_of(&project.id), ProjectStatus::Stopped) {
@@ -1073,7 +1138,7 @@ impl Oracle {
             } else {
                 "Waiting for output…"
             };
-            let mut ui = self.ui(0.0);
+            let mut ui = self.ui(dt);
             ui.placeholder(x, y + 20.0, width, message);
             return;
         }
@@ -1229,34 +1294,29 @@ impl ApplicationHandler for Oracle {
             return;
         }
 
-        // Fit the preferred size to the display rather than assuming it fits.
+        // Size the window in physical pixels, as a fraction of the display.
         //
-        // 1240x820 logical is 1860x1230 physical on a 150% display, which is taller than a
-        // 1080p screen — the window opened with its own controls off the bottom right. The
-        // margin leaves room for the taskbar.
-        let (preferred_width, preferred_height) = event_loop
+        // Asking for a logical size means winit multiplies by the scale factor, and the
+        // monitor's scale factor is not reliable at this point in startup — two consecutive
+        // runs on the same machine produced 1740x1020 and 1240x820 for the same request.
+        // Physical pixels take the conversion out of the picture entirely. The vertical
+        // fraction is smaller because the taskbar takes a strip that `monitor.size()` still
+        // counts as usable, and a window that overlaps it hides its own footer.
+        let preferred = event_loop
             .primary_monitor()
             .map(|monitor| {
-                let scale = monitor.scale_factor();
                 let size = monitor.size();
-                // The vertical margin is larger than the horizontal one because the taskbar
-                // takes a strip off the bottom that `monitor.size()` still counts. Without
-                // it the window's own footer — Save, Cancel — sits behind the taskbar and
-                // cannot be clicked.
-                (
-                    (size.width as f64 / scale - 120.0).min(1240.0).max(900.0),
-                    (size.height as f64 / scale - 200.0).min(820.0).max(560.0),
+                winit::dpi::PhysicalSize::new(
+                    (size.width as f64 * 0.90).min(1860.0).max(900.0),
+                    (size.height as f64 * 0.80).min(1180.0).max(600.0),
                 )
             })
-            .unwrap_or((1100.0, 740.0));
+            .unwrap_or(winit::dpi::PhysicalSize::new(1280.0, 800.0));
 
         let attributes = Window::default_attributes()
             .with_title("Oracle")
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                preferred_width,
-                preferred_height,
-            ))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(860.0, 560.0))
+            .with_inner_size(preferred)
+            .with_min_inner_size(winit::dpi::PhysicalSize::new(900.0, 600.0))
             // Oracle draws its own title bar, so the system must not draw one too.
             .with_decorations(false)
             // The window is transparent so the rounded corners of the shell show the
@@ -1389,7 +1449,11 @@ impl ApplicationHandler for Oracle {
                 self.needs_frame = true;
             }
 
-            WindowEvent::MouseInput { state, button, .. } if button == MouseButton::Left => {
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
                 diag!(
                     "mouse {state:?} at {:.0},{:.0} in_window={}",
                     self.input.pointer[0], self.input.pointer[1], self.input.pointer_in_window
@@ -1727,7 +1791,7 @@ impl Oracle {
         let glass_pick;
         // Carried out of the borrow below rather than recomputed from a sum of constants,
         // which is how the version label ended up on top of the Add button.
-        let mut cursor;
+        let cursor;
 
         {
             let mut ui = self.ui(dt);
@@ -1769,12 +1833,12 @@ impl Oracle {
 
             if let Some(value) = ui.toggle(
                 "start-windows",
-                inner,
-                y,
-                content,
+                [inner, y, content, 46.0],
                 "Start with Windows",
                 "Registers Oracle in the startup list. No administrator rights needed.",
-                settings.start_with_windows,
+                // The registry is the truth: the user may have removed the entry from the
+                // Settings app since Oracle last wrote it.
+                crate::core::autostart::is_enabled(),
             ) {
                 next.start_with_windows = value;
                 touched = true;
@@ -1783,9 +1847,7 @@ impl Oracle {
 
             if let Some(value) = ui.toggle(
                 "start-hidden",
-                inner,
-                y,
-                content,
+                [inner, y, content, 46.0],
                 "Start hidden in the tray",
                 "Comes up as a tray icon only, without opening the window.",
                 settings.start_hidden,
@@ -1797,9 +1859,7 @@ impl Oracle {
 
             if let Some(value) = ui.toggle(
                 "autostart-projects",
-                inner,
-                y,
-                content,
+                [inner, y, content, 46.0],
                 "Launch flagged projects",
                 "Starts every project marked to run when Oracle starts.",
                 settings.autostart_projects,
@@ -1811,9 +1871,7 @@ impl Oracle {
 
             if let Some(value) = ui.toggle(
                 "minimise-tray",
-                inner,
-                y,
-                content,
+                [inner, y, content, 46.0],
                 "Close to tray",
                 "Closing the window keeps Oracle running.",
                 settings.minimise_to_tray,
@@ -2264,13 +2322,13 @@ fn open_url(project: &Project) -> Option<String> {
     project.remote.as_ref().map(|r| r.url.clone())
 }
 
-fn describe_remote(status: Option<&crate::core::remote::RemoteStatus>) -> String {
+fn describe_remote(status: &crate::core::remote::RemoteStatus) -> String {
     use crate::core::remote::RemoteStatus;
     match status {
-        Some(RemoteStatus::Up { ms, .. }) => format!("Up · {ms} ms"),
-        Some(RemoteStatus::Degraded { code, ms }) => format!("HTTP {code} · {ms} ms"),
-        Some(RemoteStatus::Down { reason }) => reason.clone(),
-        _ => "Not checked yet".to_string(),
+        RemoteStatus::Up { ms, .. } => format!("Up · {ms} ms"),
+        RemoteStatus::Degraded { code, ms } => format!("HTTP {code} · {ms} ms"),
+        RemoteStatus::Down { reason } => reason.clone(),
+        RemoteStatus::Unchecked => "Not checked yet".to_string(),
     }
 }
 
@@ -2407,7 +2465,12 @@ impl Oracle {
             leave = ui.icon_button("form-close", back, "\u{2715}", false);
 
             changed |= ui.labelled_field(
-                "name", inner, y, content, "Name", &mut name, "Project name", widths[0],
+                "name",
+                [inner, y, content, 52.0],
+                "Name",
+                &mut name,
+                "Project name",
+                widths[0],
             );
             y += 62.0;
 
@@ -2416,9 +2479,7 @@ impl Oracle {
 
             changed |= ui.labelled_field(
                 "root",
-                inner,
-                y,
-                content,
+                [inner, y, content, 52.0],
                 "Folder",
                 &mut root,
                 "C:\\Users\\you\\projects\\app",
@@ -2428,9 +2489,7 @@ impl Oracle {
 
             changed |= ui.labelled_field(
                 "command",
-                inner,
-                y,
-                content,
+                [inner, y, content, 52.0],
                 "Command",
                 &mut command,
                 "npm run dev",
@@ -2439,13 +2498,16 @@ impl Oracle {
             y += 62.0;
 
             changed |= ui.labelled_field(
-                "port", inner, y, half, "Port", &mut port, "3000", widths[3],
+                "port",
+                [inner, y, half, 52.0],
+                "Port",
+                &mut port,
+                "3000",
+                widths[3],
             );
             changed |= ui.labelled_field(
                 "open",
-                inner + half + gap::MD,
-                y,
-                half,
+                [inner + half + gap::MD, y, half, 52.0],
                 "Open URL",
                 &mut open,
                 "defaults to localhost",
@@ -2458,9 +2520,7 @@ impl Oracle {
 
             changed |= ui.labelled_field(
                 "health",
-                inner,
-                y,
-                content,
+                [inner, y, content, 52.0],
                 "Health check URL",
                 &mut health,
                 "https://app.example.com/health",
@@ -2640,6 +2700,7 @@ impl Oracle {
         self.config.normalise_order();
         self.statuses.remove(project_id);
         self.usage.remove(project_id);
+        self.monitor.forget(project_id);
         self.git.remove(project_id);
         self.remote.remove(project_id);
 
@@ -2845,9 +2906,54 @@ impl Oracle {
         self.panel_frame
             .rule(0.0, 48.0, width, false, palette.line);
 
+        // Machine-wide gauges, as the web panel carried. Sampled here rather than in `poll`
+        // because this is the only screen that shows them.
+        let system = self.monitor.system_usage();
+        let memory_fraction = if system.memory_total > 0 {
+            system.memory_used as f32 / system.memory_total as f32
+        } else {
+            0.0
+        };
+
+        let gauge_width = (width - gap::MD * 3.0) * 0.5;
+        for (index, (label, value, fraction)) in [
+            ("CPU", percent(system.cpu), system.cpu / 100.0),
+            ("MEMORY", bytes(system.memory_used), memory_fraction),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let rect: Rect = [
+                gap::MD + (gauge_width + gap::MD) * index as f32,
+                56.0,
+                gauge_width,
+                46.0,
+            ];
+            self.panel_frame
+                .panel(rect, GlassStyle::sunken(&palette), 1.0);
+
+            self.panel_frame.text(
+                Run::new(value, rect[0] + gap::SM, rect[1] + 6.0, text::MD, palette.ink)
+                    .weight(640),
+            );
+            self.panel_frame.text(
+                Run::new(*label, rect[0] + rect[2] - gap::SM, rect[1] + 9.0, text::XS, palette.muted)
+                    .align(Align::Right)
+                    .weight(600),
+            );
+
+            let track: Rect = [rect[0] + gap::SM, rect[1] + 32.0, rect[2] - gap::SM * 2.0, 3.0];
+            self.panel_frame.fill(track, palette.line, 1.5);
+            self.panel_frame.fill(
+                [track[0], track[1], track[2] * fraction.clamp(0.0, 1.0), track[3]],
+                palette.accent,
+                1.5,
+            );
+        }
+
         // Rows.
         let projects: Vec<Project> = self.config.projects.clone();
-        let mut y = 58.0;
+        let mut y = 116.0;
 
         if projects.is_empty() {
             self.panel_frame.text(
@@ -3058,7 +3164,11 @@ impl Oracle {
 
             WindowEvent::CursorLeft { .. } => self.input.pointer_in_window = false,
 
-            WindowEvent::MouseInput { state, button, .. } if button == MouseButton::Left => {
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
                 match state {
                     ElementState::Pressed => {
                         self.input.down = true;
@@ -3162,6 +3272,67 @@ impl Oracle {
                     eprintln!("Oracle could not autostart {}: {err}", project.name);
                 }
             }
+        }
+    }
+}
+
+/// Puts text on the clipboard.
+///
+/// Shelled out to `clip` rather than taking a clipboard crate: it is one call, it is present
+/// on every Windows since 7, and a dependency that pulls in a windowing layer of its own to
+/// copy a string is not worth the binary.
+#[cfg(windows)]
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write;
+    use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
+
+    let mut command = std::process::Command::new("cmd");
+    command.raw_arg("/C clip");
+    command.creation_flags(0x0800_0000);
+    command.stdin(Stdio::piped());
+
+    if let Ok(mut child) = command.spawn() {
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+#[cfg(not(windows))]
+fn copy_to_clipboard(text: &str) {
+    let _ = text;
+}
+
+impl Oracle {
+    /// A dismissible strip across the top, for the one message worth interrupting for.
+    fn notice_banner(&mut self, width: f32, dt: f32) {
+        let Some(message) = self.notice.clone() else {
+            return;
+        };
+        let palette = self.palette;
+
+        let rect: Rect = [gap::LG, TITLEBAR + gap::SM, width - gap::LG * 2.0, 44.0];
+        self.frame
+            .fill(rect, theme::fade(palette.danger, 0.14), radius::SM);
+        self.frame
+            .fill([rect[0], rect[1], 3.0, rect[3]], palette.danger, 1.5);
+
+        self.frame.text(
+            Run::new(
+                message,
+                rect[0] + gap::MD,
+                rect[1] + 13.0,
+                text::SM,
+                palette.ink,
+            )
+            .width(rect[2] - gap::MD - 44.0),
+        );
+
+        let dismiss: Rect = [rect[0] + rect[2] - 36.0, rect[1] + 7.0, 30.0, 30.0];
+        if self.ui(dt).icon_button("notice", dismiss, "\u{2715}", false) {
+            self.notice = None;
         }
     }
 }

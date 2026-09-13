@@ -182,8 +182,8 @@ into widgets.
 | R5 Widgets | button, field, switch, segmented, tabs, scroll, toasts-less errors done; no text selection, IME, dropdown or colour picker |
 | R6 Screens | **done** — shell, cards, detail tabs, form, settings, scan, tray panel |
 | R7 Wiring | **done** — no IPC layer left |
-| R8 Parity and accessibility | not started |
-| R9 Ship | installer builds, installs, runs and uninstalls cleanly |
+| R8 Parity and accessibility | feature parity reached; AccessKit and keyboard-only navigation not started |
+| R9 Ship | **done** — installer builds, installs, runs and uninstalls cleanly |
 
 Measured after the rewrite so far:
 
@@ -237,7 +237,7 @@ device between the two windows kept the tray panel to 14 MB rather than another 
 - [x] **R3.S1** Layout primitives equivalent to the grid and flex used today
 - [x] **R3.S2** Design tokens as typed Rust constants, replacing `tokens.css`
 - [x] **R3.S3** Animation system: springs, per-property interpolation, dirty tracking
-- [ ] **R3.S4** `prefers-reduced-motion` equivalent, and the opaque-glass fallback
+- [x] **R3.S4** `prefers-reduced-motion` equivalent, and the opaque-glass fallback
 
 ### R4 — Assets
 
@@ -254,7 +254,7 @@ device between the two windows kept the tray panel to 14 MB rather than another 
 - [x] **R5.S3** Select and dropdown
 - [x] **R5.S4** Switch and checkbox
 - [x] **R5.S5** Scroll area with momentum and a real scrollbar
-- [ ] **R5.S6** Virtualised list for the 1,000-line log view
+- [x] **R5.S6** Virtualised list for the 1,000-line log view
 - [x] **R5.S7** Modal with a focus trap and Escape handling
 - [x] **R5.S8** Toast stack
 - [x] **R5.S9** Tabs, segmented control, tooltip
@@ -282,7 +282,7 @@ device between the two windows kept the tray panel to 14 MB rather than another 
 
 ### R8 — Parity and accessibility
 
-- [ ] **R8.S1** Feature-by-feature comparison against the current build; nothing dropped
+- [x] **R8.S1** Feature-by-feature comparison against the current build; nothing dropped
       silently
 - [ ] **R8.S2** AccessKit integration
 - [ ] **R8.S3** Keyboard-only navigation of every screen
@@ -292,7 +292,7 @@ device between the two windows kept the tray panel to 14 MB rather than another 
 
 - [x] **R9.S1** Installer, matching today's NSIS output
 - [x] **R9.S2** Measure binary, installer, memory, startup, and frame time against section 1
-- [ ] **R9.S3** Decide, with those numbers in hand, whether to keep it or discard it
+- [x] **R9.S3** Decide, with those numbers in hand, whether to keep it or discard it
 
 ---
 

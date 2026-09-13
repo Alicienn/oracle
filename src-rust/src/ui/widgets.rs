@@ -180,15 +180,13 @@ impl Ui<'_> {
     pub fn toggle(
         &mut self,
         key: &str,
-        x: f32,
-        y: f32,
-        width: f32,
+        rect: Rect,
         title: &str,
         description: &str,
         value: bool,
     ) -> Option<bool> {
         let palette = self.palette;
-        let rect: Rect = [x, y, width, 46.0];
+        let (x, y, width) = (rect[0], rect[1], rect[2]);
         let response = self.input.interact(id("toggle", key), rect, self.dt);
 
         if response.hover > 0.01 {
@@ -368,21 +366,26 @@ impl Ui<'_> {
     }
 
     /// A field with a label above it, as the project form uses throughout.
+    ///
+    /// `rect` covers the pair; the label takes the first 20 points and the field the rest.
     pub fn labelled_field(
         &mut self,
         key: &str,
-        x: f32,
-        y: f32,
-        width: f32,
+        rect: Rect,
         label: &str,
         value: &mut String,
         placeholder: &str,
         text_width: f32,
     ) -> bool {
         let palette = self.palette;
-        self.frame.text(
-            Run::new(label, x, y, text::SM, palette.ink_soft).weight(570),
-        );
-        self.field(key, [x, y + 20.0, width, 32.0], value, placeholder, text_width)
+        self.frame
+            .text(Run::new(label, rect[0], rect[1], text::SM, palette.ink_soft).weight(570));
+        self.field(
+            key,
+            [rect[0], rect[1] + 20.0, rect[2], rect[3] - 20.0],
+            value,
+            placeholder,
+            text_width,
+        )
     }
 }

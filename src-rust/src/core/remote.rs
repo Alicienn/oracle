@@ -27,23 +27,6 @@ pub enum RemoteStatus {
     Unchecked,
 }
 
-impl RemoteStatus {
-    pub fn latency_ms(&self) -> Option<u64> {
-        match self {
-            Self::Up { ms, .. } | Self::Degraded { ms, .. } => Some(*ms),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteReport {
-    pub project_id: String,
-    pub status: RemoteStatus,
-    pub checked_at: i64,
-}
-
 /// Builds the shared client.
 ///
 /// Redirects are not followed: a deployment that has started redirecting to a login page or

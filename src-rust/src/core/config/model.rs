@@ -73,18 +73,6 @@ impl Project {
         }
     }
 
-    /// The URL the "open" button should use, if any.
-    pub fn open_url(&self) -> Option<String> {
-        if let Some(local) = &self.local {
-            if let Some(url) = &local.open_url {
-                return Some(url.clone());
-            }
-            if let Some(port) = local.port {
-                return Some(format!("http://localhost:{port}"));
-            }
-        }
-        self.remote.as_ref().map(|r| r.url.clone())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -444,22 +432,6 @@ mod tests {
         assert_eq!(config.projects[0].kind, ProjectKind::Other);
         assert!(!config.projects[0].favorite);
         assert_eq!(config.settings.theme, Theme::System);
-    }
-
-    #[test]
-    fn open_url_prefers_the_explicit_override() {
-        let mut project = Project::new("Site");
-        let mut local = LocalTarget::new(PathBuf::from("/tmp"), "npm run dev");
-        local.port = Some(3000);
-        project.local = Some(local);
-
-        assert_eq!(project.open_url().as_deref(), Some("http://localhost:3000"));
-
-        project.local.as_mut().unwrap().open_url = Some("http://localhost:3000/admin".into());
-        assert_eq!(
-            project.open_url().as_deref(),
-            Some("http://localhost:3000/admin")
-        );
     }
 
     #[test]

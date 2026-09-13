@@ -20,12 +20,6 @@ pub struct GitStatus {
     pub last_commit: Option<Commit>,
 }
 
-impl GitStatus {
-    pub fn is_clean(&self) -> bool {
-        self.dirty_files == 0
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
@@ -190,7 +184,7 @@ mod tests {
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert_eq!(status.ahead, 0);
         assert_eq!(status.behind, 0);
-        assert!(status.is_clean());
+        assert_eq!(status.dirty_files, 0);
     }
 
     #[test]
@@ -218,7 +212,7 @@ mod tests {
         let status = parse_status(raw);
 
         assert_eq!(status.dirty_files, 3);
-        assert!(!status.is_clean());
+        assert!(status.dirty_files > 0);
     }
 
     #[test]

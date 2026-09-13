@@ -60,7 +60,7 @@ pub fn scan(roots: &[PathBuf], known: &[PathBuf]) -> Vec<Candidate> {
         candidate.already_known = known.iter().any(|k| paths_equal(k, &candidate.root));
     }
 
-    found.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    found.sort_by_key(|a| a.name.to_lowercase());
     found
 }
 

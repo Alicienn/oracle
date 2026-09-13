@@ -40,12 +40,6 @@ pub fn config_path() -> PathBuf {
     data_dir().join(FILE_NAME)
 }
 
-/// Where user-supplied project icons are copied to, so the config never points at a file
-/// the user might later move or delete.
-pub fn icons_dir() -> PathBuf {
-    data_dir().join("icons")
-}
-
 pub fn load() -> Loaded {
     let path = config_path();
 
