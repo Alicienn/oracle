@@ -7,6 +7,7 @@
 //! one at a time, and the vocabulary is the point.
 #![allow(dead_code)]
 
+pub mod icons;
 pub mod input;
 pub mod paint;
 pub mod renderer;

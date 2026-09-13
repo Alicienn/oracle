@@ -4,16 +4,51 @@
 //! as a list of statements rather than twenty lines of rectangle arithmetic per button. This
 //! is the immediate-mode shape: laid out, drawn, and hit-tested in one pass, with only the
 //! animation state persisting between frames.
+//!
+//! # Where the motion lives
+//!
+//! A control here owns no state, so anything that moves has to be a spring held by [`Input`]
+//! and keyed by the widget's id. That is why a selection indicator is drawn once, at a
+//! position the spring reports, rather than once per option: the indicator is a single object
+//! that travels, and modelling it as one is what makes it read as one.
 
-use super::input::{id, Input};
+use super::icons::{self, Icon};
+use super::input::{id, Id, Input};
 use super::paint::{Frame, Rect};
 use super::text::{Align, Run};
-use super::theme::{fade, gap, radius, text, GlassStyle, Palette};
+use super::theme::{fade, gap, motion, radius, text, weight, GlassStyle, Palette};
+
+/// Resolves how wide a string will render, from the previous frame's measurements.
+///
+/// Only the text engine knows, and it is not reachable from a layout pass — so a width that
+/// has not been asked for yet comes back as an estimate and is correct from the next frame.
+/// One frame of lag on a tab strip is invisible; laying it out from a character count is
+/// not, which is what the first version did and why its tabs had uneven padding.
+pub struct Measure<'a> {
+    pub cache: &'a mut std::collections::HashMap<(String, u32, u16), f32>,
+    pub queue: &'a mut Vec<(String, f32, u16)>,
+}
+
+impl Measure<'_> {
+    pub fn width(&mut self, value: &str, size: f32, weight: u16) -> f32 {
+        let key = (value.to_string(), size.to_bits(), weight);
+        if let Some(found) = self.cache.get(&key) {
+            return *found;
+        }
+        if !self.queue.iter().any(|(q, s, w)| q == value && *s == size && *w == weight) {
+            self.queue.push((value.to_string(), size, weight));
+        }
+        // Inter's average advance over lowercase Latin is about 0.52 em. Only ever used for
+        // one frame, and only for strings the interface has never drawn before.
+        value.chars().count() as f32 * size * 0.52
+    }
+}
 
 /// Everything a control needs, bundled so call sites stay short.
 pub struct Ui<'a> {
     pub frame: &'a mut Frame,
     pub input: &'a mut Input,
+    pub measure: Measure<'a>,
     pub palette: Palette,
     pub dt: f32,
 }
@@ -31,16 +66,45 @@ pub enum Weight {
     Danger,
 }
 
+/// What a button shows beside its label, if anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Adornment {
+    #[default]
+    None,
+    /// An icon, to the left of the label.
+    Icon(Icon),
+    /// A turning spinner in place of the icon, while the button's action is in flight.
+    Busy,
+}
+
 impl Ui<'_> {
-    /// A button with a label. Returns true on the frame it is clicked.
+    /// A button with a label.
     pub fn button(&mut self, key: &str, rect: Rect, label: &str, weight: Weight) -> bool {
-        let response = self.input.interact(id("button", key), rect, self.dt);
+        self.adorned_button(key, rect, label, weight, Adornment::None)
+    }
+
+    /// A button with an icon, a spinner, or neither, beside its label.
+    ///
+    /// The icon and the label are centred as a pair, so a button does not visibly shift its
+    /// caption when an icon is swapped for a spinner mid-action.
+    pub fn adorned_button(
+        &mut self,
+        key: &str,
+        rect: Rect,
+        label: &str,
+        weight: Weight,
+        adornment: Adornment,
+    ) -> bool {
+        let widget = id("button", key);
+        let response = self.input.interact(widget, rect, self.dt);
         let palette = self.palette;
 
-        // Pressing compresses the surface slightly. Small enough to feel physical rather
-        // than cartoonish — the same 1.5% the stylesheet used.
-        let squeeze = response.press * 0.015;
-        let inset = rect[2].min(rect[3]) * squeeze * 0.5;
+        // Pressing compresses the surface and settles it towards the page; hovering lifts it
+        // off. Both are the same gesture read in opposite directions, which is why they are
+        // one number: a button cannot be lifted and pressed at once.
+        let lift = response.hover * (1.0 - response.press);
+        let squeeze = response.press * 0.02;
+        let inset = rect[3] * squeeze * 0.5;
         let shrunk: Rect = [
             rect[0] + inset,
             rect[1] + inset,
@@ -50,31 +114,28 @@ impl Ui<'_> {
 
         match weight {
             Weight::Primary => {
-                let lift = response.hover * 0.10;
-                self.frame.fill(
-                    shrunk,
-                    [
-                        palette.accent[0] + lift,
-                        palette.accent[1] + lift,
-                        palette.accent[2] + lift,
-                        1.0,
-                    ],
-                    radius::SM,
-                );
+                // `accent_deep` rather than `accent`: white on the brand orange is 3.6:1,
+                // which is under what a caption needs. Hover brightens back towards the
+                // brand colour, so the control is at its most recognisable under the pointer.
+                let base = crate::ui::theme::mix(palette.accent_deep, palette.accent, lift);
+                self.frame
+                    .fill_lifted(shrunk, base, radius::SM, 0.5 + lift * 0.9);
             }
             Weight::Ghost => {
                 if response.hover > 0.01 {
                     self.frame
-                        .fill(shrunk, fade(palette.line, response.hover * 0.9), radius::SM);
+                        .fill(shrunk, fade(palette.line, response.hover * 1.1), radius::SM);
                 }
             }
             _ => {
-                self.frame
-                    .panel(shrunk, GlassStyle::control(&palette), 1.0);
-                if response.hover > 0.01 {
-                    self.frame
-                        .fill(shrunk, fade(palette.line, response.hover * 0.5), radius::SM);
-                }
+                let mut style = GlassStyle::control(&palette);
+                // Hover thickens the glass rather than tinting it. A button that gets paler
+                // under the pointer reads as a state change; one that gets deeper and casts
+                // further reads as movement, which is what it is.
+                style.shadow *= 1.0 + lift * 1.1;
+                style.shadow_blur *= 1.0 + lift * 0.5;
+                style.edge *= 1.0 + lift * 0.35;
+                self.frame.panel(shrunk, style, 1.0);
             }
         }
 
@@ -84,20 +145,41 @@ impl Ui<'_> {
             _ => palette.ink,
         };
 
-        self.frame.centred(
-            label,
-            rect[0] + rect[2] * 0.5,
-            rect[1] + (rect[3] - text::BASE * 1.35) * 0.5,
-            text::BASE,
-            ink,
-            570,
+        let glyph = 15.0;
+        let label_width = self.measure.width(label, text::BASE, weight::SEMIBOLD);
+        let adorned = adornment != Adornment::None;
+        let total = label_width + if adorned { glyph + gap::SM } else { 0.0 };
+
+        let centre = rect[0] + rect[2] * 0.5;
+        let left = centre - total * 0.5;
+        let middle = rect[1] + rect[3] * 0.5;
+
+        match adornment {
+            Adornment::None => {}
+            Adornment::Icon(icon) => {
+                self.frame
+                    .icon(icon, [left + glyph * 0.5, middle], glyph, ink);
+            }
+            Adornment::Busy => self.spinner([left + glyph * 0.5, middle], glyph, ink),
+        }
+
+        let text_left = if adorned { left + glyph + gap::SM } else { left };
+        self.frame.text(
+            Run::new(
+                label,
+                text_left,
+                middle - text::BASE * 0.72,
+                text::BASE,
+                ink,
+            )
+            .weight(weight::SEMIBOLD),
         );
 
         response.clicked
     }
 
-    /// A square button holding a single glyph.
-    pub fn icon_button(&mut self, key: &str, rect: Rect, glyph: &str, danger: bool) -> bool {
+    /// A square button holding a single icon.
+    pub fn icon_button(&mut self, key: &str, rect: Rect, icon: Icon, danger: bool) -> bool {
         let response = self.input.interact(id("icon", key), rect, self.dt);
         let palette = self.palette;
 
@@ -105,7 +187,7 @@ impl Ui<'_> {
             let tint = if danger {
                 fade(palette.danger, response.hover)
             } else {
-                fade(palette.line, response.hover)
+                fade(palette.line, response.hover * 1.2)
             };
             self.frame.fill(rect, tint, radius::SM);
         }
@@ -113,59 +195,103 @@ impl Ui<'_> {
         let ink = if danger && response.hover > 0.5 {
             [1.0, 1.0, 1.0, 1.0]
         } else {
-            palette.muted
+            // The icon lightens towards full ink as the pointer arrives. A control that
+            // stays muted under the pointer reads as disabled.
+            crate::ui::theme::mix(palette.muted, palette.ink, response.hover)
         };
 
-        self.frame.centred(
+        // Sized against the button rather than fixed, so the same call serves a 26-point
+        // window control and a 34-point toolbar button without either overflowing — which is
+        // exactly what went wrong when these were font glyphs inheriting a size.
+        let glyph = (rect[2].min(rect[3]) * 0.52).clamp(12.0, 22.0);
+        self.frame.icon(
+            icon,
+            [rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5],
             glyph,
-            rect[0] + rect[2] * 0.5,
-            rect[1] + (rect[3] - text::MD * 1.35) * 0.5,
-            text::MD,
             ink,
-            500,
         );
 
         response.clicked
     }
 
-    /// A row of mutually exclusive options. Returns the one clicked, if any.
-    pub fn segmented(&mut self, key: &str, rect: Rect, options: &[&str], selected: usize) -> Option<usize> {
+    /// A turning spinner, for an action that is in flight.
+    ///
+    /// Driven by the wall clock rather than by a spring: it has no target to reach, and a
+    /// spring that settles is the one thing a busy indicator must never do.
+    pub fn spinner(&mut self, centre: [f32; 2], size: f32, colour: super::theme::Colour) {
+        self.frame.icon_full(
+            icons::SPINNER,
+            centre,
+            size,
+            colour,
+            // Four fifths of a second per turn. Faster reads as frantic, slower as stuck.
+            self.input.clock * (std::f32::consts::TAU / 0.8),
+            false,
+        );
+    }
+
+    /// A row of mutually exclusive options.
+    ///
+    /// The selected cell is a single pane of glass that *travels* between options rather than
+    /// a highlight that switches off in one place and on in another. That distinction is the
+    /// entire difference between this reading as a physical control and as a list of states,
+    /// and it is why the indicator is drawn once, outside the loop, at a sprung rectangle.
+    pub fn segmented(
+        &mut self,
+        key: &str,
+        rect: Rect,
+        options: &[&str],
+        selected: usize,
+    ) -> Option<usize> {
         let palette = self.palette;
-        self.frame.panel(rect, GlassStyle::sunken(&palette), 1.0);
+        self.frame
+            .panel(rect, GlassStyle::sunken(&palette).radius(radius::SM), 1.0);
 
+        if options.is_empty() {
+            return None;
+        }
+
+        let pad = 3.0;
         let width = rect[2] / options.len() as f32;
+        let cell = |index: usize| -> Rect {
+            [
+                rect[0] + width * index as f32 + pad,
+                rect[1] + pad,
+                width - pad * 2.0,
+                rect[3] - pad * 2.0,
+            ]
+        };
+
+        // The indicator, before the labels, so text sits on top of its own glass.
+        let target = cell(selected.min(options.len() - 1));
+        let slid = self
+            .input
+            .animate_rect(id(key, "indicator"), target, motion::SLIDE, self.dt);
+        self.frame.panel(slid, GlassStyle::slider(&palette), 1.0);
+
         let mut clicked = None;
-
         for (index, label) in options.iter().enumerate() {
-            let cell: Rect = [
-                rect[0] + width * index as f32 + 3.0,
-                rect[1] + 3.0,
-                width - 6.0,
-                rect[3] - 6.0,
-            ];
-            let response = self
-                .input
-                .interact(id(key, label), cell, self.dt);
+            let cell = cell(index);
+            let response = self.input.interact(id(key, label), cell, self.dt);
 
-            if index == selected {
+            if index != selected && response.hover > 0.01 {
                 self.frame
-                    .fill(cell, palette.glass_tint_strong, radius::SM);
-            } else if response.hover > 0.01 {
-                self.frame
-                    .fill(cell, fade(palette.line, response.hover * 0.7), radius::SM);
+                    .fill(cell, fade(palette.line, response.hover * 0.7), radius::XS);
             }
 
             self.frame.centred(
                 *label,
                 cell[0] + cell[2] * 0.5,
-                cell[1] + (cell[3] - text::SM * 1.35) * 0.5,
+                cell[1] + (cell[3] - text::SM * 1.4) * 0.5,
                 text::SM,
                 if index == selected {
                     palette.ink
                 } else {
-                    palette.muted
+                    // Towards full ink on hover, so an unselected option is legible the
+                    // moment it is a candidate.
+                    crate::ui::theme::mix(palette.muted, palette.ink, response.hover * 0.7)
                 },
-                560,
+                if index == selected { weight::SEMIBOLD } else { weight::MEDIUM },
             );
 
             if response.clicked {
@@ -176,7 +302,7 @@ impl Ui<'_> {
         clicked
     }
 
-    /// A labelled switch. Returns the new value when it is flipped.
+    /// A labelled switch.
     pub fn toggle(
         &mut self,
         key: &str,
@@ -187,7 +313,8 @@ impl Ui<'_> {
     ) -> Option<bool> {
         let palette = self.palette;
         let (x, y, width) = (rect[0], rect[1], rect[2]);
-        let response = self.input.interact(id("toggle", key), rect, self.dt);
+        let widget = id("toggle", key);
+        let response = self.input.interact(widget, rect, self.dt);
 
         if response.hover > 0.01 {
             self.frame.fill(
@@ -197,77 +324,112 @@ impl Ui<'_> {
             );
         }
 
+        self.frame
+            .text(Run::new(title, x, y + 6.0, text::BASE, palette.ink).weight(weight::MEDIUM));
         self.frame.text(
-            Run::new(title, x, y + 6.0, text::BASE, palette.ink).weight(560),
-        );
-        self.frame.text(
-            Run::new(description, x, y + 24.0, text::SM, palette.muted)
-                .width(width - 60.0),
+            Run::new(description, x, y + 24.0, text::SM, palette.muted).width(width - 64.0),
         );
 
-        // The track, then the knob. The knob position is the value, so a spring on it would
-        // be the natural next step; a fill is enough while the rest of the screen lands.
-        let track: Rect = [x + width - 40.0, y + 11.0, 40.0, 23.0];
+        let track: Rect = [x + width - 42.0, y + 10.0, 42.0, 24.0];
+
+        // One spring drives the whole switch: the knob's travel, the track's colour, and how
+        // far the knob stretches as it goes. Deriving them from a single number is what keeps
+        // them in step — three springs would arrive at three different times.
+        let on = self
+            .input
+            .animate(widget ^ 0xFF, if value { 1.0 } else { 0.0 }, motion::PANEL, self.dt);
+
         self.frame.fill(
             track,
-            if value { palette.accent } else { palette.line_strong },
+            crate::ui::theme::mix(palette.line_strong, palette.accent, on),
             radius::FULL,
         );
-        self.frame.dot(
-            [
-                track[0] + if value { 28.5 } else { 11.5 },
-                track[1] + 11.5,
-            ],
-            19.0,
+
+        // The knob elongates towards the direction of travel at the midpoint and rounds off
+        // again at either end — the squash a physical switch would show. `on * (1 - on)`
+        // peaks at the halfway point and is zero at both rest states, so it needs no
+        // special-casing at the ends.
+        let stretch = on * (1.0 - on) * 10.0;
+        let knob = 18.0;
+        let travel = track[2] - knob - 6.0;
+        let knob_x = track[0] + 3.0 + travel * on - stretch * 0.5;
+
+        self.frame.fill_lifted(
+            [knob_x, track[1] + 3.0, knob + stretch, knob],
             [1.0, 1.0, 1.0, 1.0],
+            knob * 0.5,
+            0.8,
         );
 
-        self.frame
-            .rule(x, y + rect[3], width, false, palette.line);
+        self.frame.rule(x, y + rect[3], width, false, palette.line);
 
         response.clicked.then_some(!value)
     }
 
-    /// A tab strip. Returns the tab clicked, if any.
-    pub fn tabs(&mut self, key: &str, x: f32, y: f32, labels: &[&str], selected: usize) -> Option<usize> {
+    /// A tab strip, with an indicator that slides between tabs.
+    ///
+    /// Returns the tab clicked and the width the strip took, so a caller can lay out beside
+    /// it without guessing.
+    pub fn tabs(
+        &mut self,
+        key: &str,
+        x: f32,
+        y: f32,
+        labels: &[&str],
+        selected: usize,
+    ) -> (Option<usize>, f32) {
         let palette = self.palette;
-        let mut cursor = x;
-        let mut clicked = None;
 
+        // Measured, not estimated. The first version multiplied the character count by a
+        // constant, which gave "Git" and "Metrics" visibly different padding.
+        let widths: Vec<f32> = labels
+            .iter()
+            .map(|label| self.measure.width(label, text::SM, weight::SEMIBOLD) + gap::LG * 1.5)
+            .collect();
+
+        let mut cursor = x;
+        let mut rects = Vec::with_capacity(labels.len());
+        for width in &widths {
+            rects.push([cursor, y, *width, 28.0] as Rect);
+            cursor += width + gap::XS;
+        }
+
+        if let Some(target) = rects.get(selected.min(rects.len().saturating_sub(1))) {
+            let slid = self
+                .input
+                .animate_rect(id(key, "indicator"), *target, motion::SLIDE, self.dt);
+            self.frame.fill(slid, palette.accent_wash, radius::SM);
+        }
+
+        let mut clicked = None;
         for (index, label) in labels.iter().enumerate() {
-            // Roughly eight pixels per character plus padding; close enough for a tab strip
-            // and far cheaper than shaping the text twice.
-            let width = label.len() as f32 * 7.2 + 20.0;
-            let rect: Rect = [cursor, y, width, 27.0];
+            let rect = rects[index];
             let response = self.input.interact(id(key, label), rect, self.dt);
 
-            if index == selected {
-                self.frame.fill(rect, palette.accent_wash, radius::SM);
-            } else if response.hover > 0.01 {
+            if index != selected && response.hover > 0.01 {
                 self.frame
                     .fill(rect, fade(palette.line, response.hover * 0.8), radius::SM);
             }
 
             self.frame.centred(
                 *label,
-                rect[0] + width * 0.5,
-                rect[1] + 5.0,
+                rect[0] + rect[2] * 0.5,
+                rect[1] + (rect[3] - text::SM * 1.4) * 0.5,
                 text::SM,
                 if index == selected {
-                    palette.accent
+                    palette.accent_ink
                 } else {
-                    palette.muted
+                    crate::ui::theme::mix(palette.muted, palette.ink, response.hover * 0.7)
                 },
-                560,
+                weight::SEMIBOLD,
             );
 
             if response.clicked {
                 clicked = Some(index);
             }
-            cursor += width + 4.0;
         }
 
-        clicked
+        (clicked, cursor - x)
     }
 
     /// A label and a value on one line, as the overview and git panes use throughout.
@@ -275,16 +437,15 @@ impl Ui<'_> {
         let palette = self.palette;
         self.frame.label(label, x, y, text::SM, palette.muted);
         self.frame.text(
-            Run::new(value, x + 104.0, y, text::BASE, palette.ink).width(width - 104.0),
+            Run::new(value, x + 108.0, y, text::BASE, palette.ink).width(width - 108.0),
         );
     }
 
     /// A section heading, in the small uppercase style the stylesheet used.
     pub fn heading(&mut self, x: f32, y: f32, label: &str) {
         let palette = self.palette;
-        self.frame.text(
-            Run::new(label.to_uppercase(), x, y, text::XS, palette.muted).weight(700),
-        );
+        self.frame
+            .text(Run::new(label.to_uppercase(), x, y, text::XS, palette.muted).weight(weight::BOLD));
     }
 
     /// Centred placeholder text, for a pane with nothing to show yet.
@@ -295,6 +456,61 @@ impl Ui<'_> {
                 .align(Align::Centre)
                 .width(width - gap::XL),
         );
+    }
+
+    /// A pill carrying a status word, and a dot that pulses while that status is live.
+    ///
+    /// Returns the width it drew, so a caller can place something after it.
+    pub fn badge(
+        &mut self,
+        label: &str,
+        x: f32,
+        y: f32,
+        colour: super::theme::Colour,
+        pulsing: bool,
+    ) -> f32 {
+        let width = self.measure.width(label, text::XS, weight::SEMIBOLD) + 30.0;
+        let rect: Rect = [x, y, width, 20.0];
+
+        self.frame.fill(rect, fade(colour, 0.16), radius::FULL);
+
+        let dot = [x + 11.0, y + 10.0];
+        if pulsing {
+            // A halo breathing under the dot. Sine rather than a spring: this is a heartbeat,
+            // not a journey, and it should never arrive anywhere.
+            let beat = (self.input.clock * 2.2).sin() * 0.5 + 0.5;
+            self.frame
+                .glow(dot, 8.0 + beat * 9.0, fade(colour, 0.30 - beat * 0.18));
+        }
+        self.frame.dot(dot, 6.0, colour);
+
+        self.frame.text(
+            Run::new(label, x + 20.0, y + 4.0, text::XS, colour).weight(weight::SEMIBOLD),
+        );
+
+        width
+    }
+
+    /// A horizontal meter, for a percentage that changes while it is being watched.
+    ///
+    /// The bar springs to its reading rather than jumping. A CPU figure sampled twice a
+    /// second and drawn raw flickers; one that is chased reads as a measurement.
+    pub fn meter(&mut self, key: Id, rect: Rect, fraction: f32, colour: super::theme::Colour) {
+        let palette = self.palette;
+        self.frame
+            .fill(rect, fade(palette.line_strong, 0.7), radius::FULL);
+
+        let value = self
+            .input
+            .animate(key, fraction.clamp(0.0, 1.0), motion::READOUT, self.dt);
+
+        if value > 0.001 {
+            // Never narrower than its own height, so a reading of half a percent is still a
+            // dot rather than a sliver with square ends.
+            let filled = (rect[2] * value).max(rect[3]);
+            self.frame
+                .fill([rect[0], rect[1], filled, rect[3]], colour, radius::FULL);
+        }
     }
 }
 
@@ -322,30 +538,38 @@ impl Ui<'_> {
         let focused = self.input.has_focus(widget);
 
         self.frame.panel(rect, GlassStyle::sunken(&palette), 1.0);
-        if focused {
-            // A ring rather than a fill, so the text stays as legible as it was.
+
+        // The focus ring grows rather than appearing. It is the only thing on screen telling
+        // the user where their typing will go, so it is worth the two frames.
+        let ring = self.input.animate(
+            widget ^ 0xAB,
+            if focused { 1.0 } else { 0.0 },
+            motion::HOVER,
+            self.dt,
+        );
+        if ring > 0.01 {
             self.frame
-                .fill(rect, fade(palette.accent, 0.10), radius::SM);
+                .fill(rect, fade(palette.accent, ring * 0.12), radius::SM);
         } else if response.hover > 0.01 {
             self.frame
                 .fill(rect, fade(palette.line, response.hover * 0.5), radius::SM);
         }
 
-        let changed = if focused {
-            self.input.edit(value)
-        } else {
-            false
-        };
+        let changed = if focused { self.input.edit(value) } else { false };
 
         let showing_placeholder = value.is_empty() && !focused;
-        let shown = if showing_placeholder { placeholder } else { value.as_str() };
+        let shown = if showing_placeholder {
+            placeholder
+        } else {
+            value.as_str()
+        };
         let ink = if showing_placeholder {
             palette.muted
         } else {
             palette.ink
         };
 
-        let text_y = rect[1] + (rect[3] - text::BASE * 1.35) * 0.5;
+        let text_y = rect[1] + (rect[3] - text::BASE * 1.4) * 0.5;
         self.frame.text(
             Run::new(shown, rect[0] + gap::MD, text_y, text::BASE, ink)
                 .clip([rect[0], rect[1], rect[2], rect[3]]),
@@ -378,8 +602,9 @@ impl Ui<'_> {
         text_width: f32,
     ) -> bool {
         let palette = self.palette;
-        self.frame
-            .text(Run::new(label, rect[0], rect[1], text::SM, palette.ink_soft).weight(570));
+        self.frame.text(
+            Run::new(label, rect[0], rect[1], text::SM, palette.ink_soft).weight(weight::MEDIUM),
+        );
         self.field(
             key,
             [rect[0], rect[1] + 20.0, rect[2], rect[3] - 20.0],

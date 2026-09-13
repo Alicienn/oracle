@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glisten_glass::Blur;
-use glisten_motion::{Animated, Motion};
+use glisten_motion::{Animated, Motion, Spring};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
@@ -15,15 +15,23 @@ use winit::window::{Window, WindowId};
 use winit::platform::windows::WindowAttributesExtWindows;
 
 use crate::diag;
+
+/// Whether the backdrop moves on its own.
+///
+/// It does, and that is what keeps the window from ever going idle. Named rather than written
+/// as a literal `true` in the redraw condition so that turning the wash static is a one-line
+/// change here rather than an archaeology exercise in the event loop.
+const WASH_IS_ANIMATED: bool = true;
 use crate::core::config::{self, model::*};
 use crate::core::monitor::{Monitor, Sample};
 use crate::core::runner::{ProcessManager, ProjectStatus, RunnerEvent};
+use crate::ui::icons::{self, Icon};
 use crate::ui::input::{id, Input, Key};
 use crate::ui::paint::{Frame, Rect};
 use crate::ui::renderer::{Gpu, Target};
 use crate::ui::text::{Align, Run};
 use crate::ui::theme::{self, gap, radius, text, Colour, GlassStyle, Palette};
-use crate::ui::widgets::{Ui, Weight};
+use crate::ui::widgets::{Adornment, Measure, Ui, Weight};
 
 /// Height of the custom title bar, in logical pixels.
 const TITLEBAR: f32 = 42.0;
@@ -80,8 +88,12 @@ pub struct Oracle {
     /// Only the text engine knows how wide a string renders, and it is not reachable from
     /// the layout pass. One frame of lag on a caret is invisible; guessing from a character
     /// count is not.
-    measured: HashMap<String, f32>,
-    to_measure: Vec<String>,
+    ///
+    /// Keyed by size and weight as well as by the string: a tab label at 12 point semibold
+    /// and the same word in a 13 point field are different widths, and sharing one entry
+    /// between them put the caret wrong in whichever asked second.
+    measured: HashMap<(String, u32, u16), f32>,
+    to_measure: Vec<(String, f32, u16)>,
 
     /// Candidates from the last folder scan, and which are ticked.
     candidates: Vec<crate::core::discovery::Candidate>,
@@ -465,13 +477,13 @@ impl Oracle {
 
         // Window controls, in the Windows order and at the Windows size.
         let window = self.window.clone();
-        let controls: [(&str, &str); 3] = [
-            ("minimise", "\u{2500}"),
-            ("maximise", "\u{25A1}"),
-            ("close", "\u{2715}"),
+        let controls: [(&str, Icon); 3] = [
+            ("minimise", icons::MINUS),
+            ("maximise", icons::MAXIMISE),
+            ("close", icons::CLOSE),
         ];
 
-        for (index, (key, glyph)) in controls.iter().enumerate() {
+        for (index, (key, icon)) in controls.iter().enumerate() {
             let rect: Rect = [
                 width - 46.0 * (3 - index) as f32,
                 0.0,
@@ -495,7 +507,7 @@ impl Oracle {
                 palette.muted
             };
             self.frame
-                .centred(*glyph, rect[0] + 23.0, rect[1] + 12.0, text::SM, ink, 400);
+                .icon(*icon, [rect[0] + 23.0, rect[1] + TITLEBAR * 0.5 - 0.5], 14.0, ink);
 
             if response.clicked {
                 if let Some(window) = window.as_ref() {
@@ -578,15 +590,15 @@ impl Oracle {
         let bottom = top + height - gap::MD - 88.0;
         let mut go = None;
 
-        for (index, (key, glyph, screen)) in [
-            ("rail-scan", "\u{2315}", Screen::Scan),
-            ("rail-settings", "\u{2699}", Screen::Settings),
+        for (index, (key, icon, screen)) in [
+            ("rail-scan", icons::SCAN, Screen::Scan),
+            ("rail-settings", icons::SETTINGS, Screen::Settings),
         ]
         .iter()
         .enumerate()
         {
             let rect: Rect = [(RAIL - 40.0) * 0.5, bottom + index as f32 * 44.0, 40.0, 40.0];
-            if self.ui(dt).icon_button(key, rect, glyph, false) {
+            if self.ui(dt).icon_button(key, rect, *icon, false) {
                 go = Some(*screen);
             }
         }
@@ -626,42 +638,18 @@ impl Oracle {
         }
 
         // Filter segments.
-        let mut fx = search[0] + search[2] + gap::SM;
-        let seg_rect: Rect = [fx, row_y, filters_width, 34.0];
-        self.frame
-            .panel(seg_rect, GlassStyle::sunken(&palette), 1.0);
+        //
+        // This was hand-rolled: a fill switched off under one label and on under another,
+        // with no motion between them. It is the shared `segmented` control now, whose
+        // indicator is one pane of glass that travels — which is what the transition the
+        // stylesheet described actually was.
+        let seg_rect: Rect = [search[0] + search[2] + gap::SM, row_y, filters_width, 34.0];
+        let labels: Vec<&str> = Filter::ALL.iter().map(|f| f.label()).collect();
+        let current = Filter::ALL.iter().position(|f| *f == self.filter).unwrap_or(0);
 
-        let seg_width = filters_width / Filter::ALL.len() as f32;
-        for filter in Filter::ALL {
-            let rect: Rect = [fx + 3.0, row_y + 3.0, seg_width - 6.0, 28.0];
-            let response = self.input.interact(id("filter", filter.label()), rect, dt);
-
-            if self.filter == filter {
-                self.frame
-                    .fill(rect, palette.glass_tint_strong, radius::SM);
-            } else if response.hover > 0.01 {
-                self.frame
-                    .fill(rect, alpha_of(palette.line, response.hover * 0.8), radius::SM);
-            }
-
-            self.frame.centred(
-                filter.label(),
-                rect[0] + rect[2] * 0.5,
-                rect[1] + 6.0,
-                text::SM,
-                if self.filter == filter {
-                    palette.ink
-                } else {
-                    palette.muted
-                },
-                560,
-            );
-
-            if response.clicked {
-                self.filter = filter;
-            }
-
-            fx += seg_width;
+        if let Some(index) = self.ui(dt).segmented("filter", seg_rect, &labels, current) {
+            self.filter = Filter::ALL[index];
+            self.scroll = 0.0;
         }
 
         // Run-everything, scan, and add.
@@ -671,25 +659,35 @@ impl Oracle {
             .values()
             .any(|s| matches!(s, ProjectStatus::Running | ProjectStatus::Starting));
 
+        // Anything in flight anywhere makes the run-everything control busy, because that
+        // is exactly what it is: one button standing in for every project's.
+        let settling = self.statuses.values().any(|s| {
+            matches!(s, ProjectStatus::Starting | ProjectStatus::Stopping)
+        });
+
         let (toggle_all, scan, _add) = {
             let mut ui = self.ui(dt);
-            let toggle_all = ui.button(
-                "toggle-all",
-                [ax, row_y, 56.0, 34.0],
-                if anyone_running { "\u{25A0}" } else { "\u{25B6}" },
-                Weight::Secondary,
-            );
-            let scan = ui.button(
-                "toolbar-scan",
-                [ax + 64.0, row_y, 56.0, 34.0],
-                "\u{2315}",
-                Weight::Secondary,
-            );
-            let add = ui.button(
+            let toggle_all = if settling {
+                let busy: Rect = [ax, row_y, 56.0, 34.0];
+                ui.frame.panel(busy, GlassStyle::control(&palette), 1.0);
+                ui.spinner([ax + 28.0, row_y + 17.0], 16.0, palette.accent);
+                let _ = ui.input.interact(id("button", "toggle-all"), busy, dt);
+                false
+            } else {
+                ui.icon_button(
+                    "toggle-all-icon",
+                    [ax, row_y, 56.0, 34.0],
+                    if anyone_running { icons::STOP } else { icons::PLAY },
+                    false,
+                )
+            };
+            let scan = ui.icon_button("toolbar-scan", [ax + 64.0, row_y, 56.0, 34.0], icons::SCAN, false);
+            let add = ui.adorned_button(
                 "toolbar-add",
                 [ax + 128.0, row_y, 56.0, 34.0],
-                "+",
+                "",
                 Weight::Primary,
+                Adornment::Icon(icons::PLUS),
             );
             (toggle_all, scan, add)
         };
@@ -778,7 +776,11 @@ impl Oracle {
 
         let mut cy = y - self.scroll;
 
-        for project in &projects {
+        // The list clips to its own viewport, so a row scrolling under the toolbar is cut
+        // rather than drawn over it.
+        self.frame.set_clip([x, y, width, height]);
+
+        for (index, project) in projects.iter().enumerate() {
             // Rows outside the viewport are skipped entirely, so a hundred projects cost
             // the same as the dozen actually on screen.
             if cy + 62.0 < y || cy > y + height {
@@ -790,12 +792,52 @@ impl Oracle {
             let response = self.input.interact(id("card", &project.id), rect, dt);
             let selected = self.selected.as_deref() == Some(project.id.as_str());
 
-            let opacity = 1.0 - response.press * 0.25;
-            self.frame.panel(rect, GlassStyle::card(&palette), opacity);
+            // Rows arrive rather than appear, each a little after the one above it.
+            //
+            // The stagger is what makes this read as a list assembling itself instead of a
+            // screen blinking on, and it costs one spring per row that is already being
+            // tracked for hover. Capped at eight rows of delay: past that the last arrival is
+            // slow enough to look like a stall rather than like sequence.
+            let arrival = self.input.animate(
+                id("arrive", &project.id),
+                1.0,
+                Spring {
+                    response: 0.42 + (index.min(8) as f32) * 0.045,
+                    damping_ratio: 0.85,
+                },
+                dt,
+            );
+            let rect: Rect = [rect[0], rect[1] + (1.0 - arrival) * 18.0, rect[2], rect[3]];
 
-            if selected {
+            // Hover lifts the card off the page — a wider, softer shadow and a brighter rim,
+            // which is the same gesture a finger under a card would produce.
+            let lift = response.hover * (1.0 - response.press);
+            let mut style = GlassStyle::card(&palette);
+            style.shadow *= 1.0 + lift * 1.3;
+            style.shadow_blur *= 1.0 + lift * 0.6;
+            style.shadow_drop *= 1.0 + lift * 0.5;
+            style.edge *= 1.0 + lift * 0.4;
+
+            let opacity = (1.0 - response.press * 0.25) * arrival;
+            self.frame.panel(rect, style, opacity);
+
+            // The selection marker grows from the middle of the edge rather than switching
+            // on, so moving between projects reads as one marker travelling down the list.
+            let mark = self.input.animate(
+                id("mark", &project.id),
+                if selected { 1.0 } else { 0.0 },
+                theme::motion::SLIDE,
+                dt,
+            );
+            if mark > 0.01 {
+                let height = rect[3] * mark;
                 self.frame.fill(
-                    [rect[0], rect[1], 3.0, rect[3]],
+                    [
+                        rect[0],
+                        rect[1] + (rect[3] - height) * 0.5,
+                        3.0,
+                        height,
+                    ],
                     palette.accent,
                     1.5,
                 );
@@ -847,40 +889,71 @@ impl Oracle {
             self.frame
                 .label(meta, tx, rect[1] + 33.0, text::SM, palette.muted);
 
-            self.frame.dot(
-                [rect[0] + rect[2] - 62.0, rect[1] + 31.0],
-                8.0,
-                status_colour(status, &palette),
-            );
+            // The status dot breathes while the project is up. It is the one thing on a
+            // card that reports something happening off screen, and a static dot says the
+            // same whether the process is alive or the app has stopped asking.
+            let dot = [rect[0] + rect[2] - 62.0, rect[1] + 31.0];
+            let colour = status_colour(status, &palette);
+            if live {
+                let beat = (self.input.clock * 2.0).sin() * 0.5 + 0.5;
+                self.frame
+                    .glow(dot, 10.0 + beat * 10.0, alpha_of(colour, 0.34 - beat * 0.20));
+            }
+            self.frame.dot(dot, 8.0, colour);
 
             // Play and stop share one control, as they did on the web.
+            //
+            // Three states, not two. A dev server takes seconds to come up and seconds to
+            // shut down, and the first version showed a stop square the instant the click
+            // landed — which claimed the thing was running before it was. While the
+            // transition is in flight the control turns instead, and refuses the click: a
+            // second press during startup used to queue a contradiction.
             let play: Rect = [rect[0] + rect[2] - 42.0, rect[1] + 16.0, 30.0, 30.0];
+            let settling = matches!(status, ProjectStatus::Starting | ProjectStatus::Stopping);
             let play_response = self.input.interact(id("play", &project.id), play, dt);
             let lit = play_response.hover > 0.01 || live;
 
-            self.frame.fill(
-                play,
-                if lit {
-                    if live {
+            // The surface swells slightly under the pointer. Two points is nothing to
+            // describe and unmistakable to watch.
+            let grow = play_response.hover * 2.0 - play_response.press * 3.0;
+            let button: Rect = [
+                play[0] - grow * 0.5,
+                play[1] - grow * 0.5,
+                play[2] + grow,
+                play[3] + grow,
+            ];
+
+            self.frame.fill_lifted(
+                button,
+                if lit || settling {
+                    if live || settling {
                         palette.accent
                     } else {
                         palette.accent_bright
                     }
                 } else {
-                    alpha_of(palette.accent, 0.18)
+                    alpha_of(palette.accent, 0.20)
                 },
                 radius::SM,
-            );
-            self.frame.centred(
-                if live { "\u{25A0}" } else { "\u{25B6}" },
-                play[0] + 15.0,
-                play[1] + 6.0,
-                text::SM,
-                if lit { [1.0, 1.0, 1.0, 1.0] } else { palette.accent },
-                500,
+                play_response.hover,
             );
 
-            if play_response.clicked {
+            let centre = [button[0] + button[2] * 0.5, button[1] + button[3] * 0.5];
+            let ink = if lit || settling {
+                [1.0, 1.0, 1.0, 1.0]
+            } else {
+                palette.accent
+            };
+
+            if settling {
+                self.ui(dt).spinner(centre, 15.0, ink);
+            } else if live {
+                self.frame.icon_solid(icons::STOP, centre, 11.0, ink);
+            } else {
+                self.frame.icon_solid(icons::PLAY, centre, 13.0, ink);
+            }
+
+            if play_response.clicked && !settling {
                 let project_id = project.id.clone();
                 diag!("play clicked on {}", project.name);
                 self.toggle(&project_id);
@@ -892,6 +965,8 @@ impl Oracle {
 
             cy += 70.0;
         }
+
+        self.frame.clear_clip();
     }
 
     fn detail_pane(&mut self, x: f32, y: f32, width: f32, height: f32, dt: f32) {
@@ -903,6 +978,18 @@ impl Oracle {
             return;
         };
 
+        // The pane is a sheet of glass in its own right, not a region of the page with a
+        // line down its left edge — which is all it was, and why it read as part of the list
+        // rather than as something that had slid over it.
+        //
+        // Extended past the window on the right and the bottom so those two corners fall
+        // outside and only the left pair is rounded. It must not be extended upward as well:
+        // that put it over the title bar and hid the window controls.
+        self.frame.panel(
+            [x, y, width + radius::LG, height + radius::LG],
+            GlassStyle::panel(&palette),
+            1.0,
+        );
         self.frame.rule(x, y, height, true, palette.line);
 
         let inner = x + gap::LG;
@@ -927,12 +1014,13 @@ impl Oracle {
                 .weight(640)
                 .width(content_width - 100.0),
         );
-        self.frame.label(
+        let live = matches!(status, ProjectStatus::Running | ProjectStatus::Starting);
+        self.ui(dt).badge(
             status_label(status),
             inner + 46.0,
-            y + gap::LG + 22.0,
-            text::SM,
-            palette.muted,
+            y + gap::LG + 20.0,
+            status_colour(status, &palette),
+            live,
         );
 
         let close: Rect = [x + width - 44.0, y + gap::LG, 30.0, 30.0];
@@ -942,9 +1030,9 @@ impl Oracle {
         let edit: Rect = [close[0] - 34.0, close[1], 30.0, 30.0];
         let (closed, edit_clicked, picked) = {
             let mut ui = self.ui(dt);
-            let closed = ui.icon_button("detail-close", close, "\u{2715}", false);
-            let edit_clicked = ui.icon_button("detail-edit", edit, "\u{270E}", false);
-            let picked = ui.tabs("tab", inner, tabs_y, &Tab::LABELS, selected_tab);
+            let closed = ui.icon_button("detail-close", close, icons::CLOSE, false);
+            let edit_clicked = ui.icon_button("detail-edit", edit, icons::PENCIL, false);
+            let (picked, _) = ui.tabs("tab", inner, tabs_y, &Tab::LABELS, selected_tab);
             (closed, edit_clicked, picked)
         };
 
@@ -1153,7 +1241,7 @@ impl Oracle {
             let ly = y + index as f32 * row_height;
             let ink = match line.stream {
                 crate::core::runner::logs::Stream::Stderr => palette.danger,
-                crate::core::runner::logs::Stream::System => palette.accent,
+                crate::core::runner::logs::Stream::System => palette.accent_ink,
                 _ => palette.ink_soft,
             };
 
@@ -1307,8 +1395,8 @@ impl ApplicationHandler for Oracle {
             .map(|monitor| {
                 let size = monitor.size();
                 winit::dpi::PhysicalSize::new(
-                    (size.width as f64 * 0.90).min(1860.0).max(900.0),
-                    (size.height as f64 * 0.80).min(1180.0).max(600.0),
+                    (size.width as f64 * 0.90).clamp(900.0, 1860.0),
+                    (size.height as f64 * 0.80).clamp(600.0, 1180.0),
                 )
             })
             .unwrap_or(winit::dpi::PhysicalSize::new(1280.0, 800.0));
@@ -1331,6 +1419,8 @@ impl ApplicationHandler for Oracle {
                 return;
             }
         };
+
+        round_corners(&window, false);
 
         self.scale = window.scale_factor() as f32;
         self.frame.set_scale(self.scale);
@@ -1363,6 +1453,9 @@ impl ApplicationHandler for Oracle {
         match event_loop.create_window(panel_attributes) {
             Ok(panel) => {
                 let panel = Arc::new(panel);
+                // The tighter radius: a popover the size of a phone screen with a 10-point
+                // corner reads as a lozenge rather than as a panel.
+                round_corners(&panel, true);
                 match gpu.attach(panel.clone(), self.scale) {
                     Ok(mut panel_target) => {
                         panel_target.set_blur(&gpu, Blur::Standard);
@@ -1524,28 +1617,30 @@ impl ApplicationHandler for Oracle {
 
                 let elapsed = self.started.elapsed().as_secs_f32();
                 let palette = self.palette;
-                if let (Some(gpu), Some(target)) = (self.gpu.as_ref(), self.target.as_mut()) {
-                    target.render(gpu, &self.frame, &palette, elapsed);
+                if let (Some(gpu), Some(target)) = (self.gpu.as_mut(), self.target.as_mut()) {
+                    target.render(gpu, &self.frame, &palette, elapsed, 1.0);
 
                     // Strings the layout pass asked about. Measured here because this is the
                     // only place the text engine is reachable, and cached because shaping is
                     // the expensive half of drawing text.
-                    for value in self.to_measure.drain(..) {
+                    for (value, size, weight) in self.to_measure.drain(..) {
                         // Shaped at the logical size, so the result is already in the units
                         // the layout works in. Dividing by the scale here would shrink the
                         // caret's travel by a third on a 150% display.
-                        let width = target.text.measure(&value, text::BASE, 400, false);
-                        self.measured.insert(value, width);
+                        let width = target.text.measure(&value, size, weight, false);
+                        self.measured.insert((value, size.to_bits(), weight), width);
                     }
                     if self.measured.len() > 256 {
                         self.measured.clear();
                     }
                 }
 
-                // Another frame is needed only while something is still moving. The wash
-                // drifts, so this is effectively always true — but the structure is here so
-                // that switching the wash off makes the app genuinely idle.
-                self.needs_frame = self.input.animating() || !self.detail.is_settled() || true;
+                // The wash drifts continuously, so the window is never truly idle while it
+                // is visible. `animating()` is still consulted rather than assumed: it is
+                // what would make the app stop redrawing if the wash were ever switched off,
+                // and leaving the condition out now would quietly remove that option.
+                let settled = !self.input.animating() && self.detail.is_settled();
+                self.needs_frame = !settled || WASH_IS_ANIMATED;
                 self.input.end_frame();
 
                 if self.closing {
@@ -1590,8 +1685,12 @@ impl ApplicationHandler for Oracle {
 
 fn status_colour(status: ProjectStatus, palette: &Palette) -> Colour {
     match status {
-        ProjectStatus::Running => palette.accent,
-        ProjectStatus::Starting | ProjectStatus::Unhealthy => palette.warn,
+        // `accent_ink` rather than `accent`: this colour is a dot in some places and the
+        // word "Running" in others, and the second use is the one with a contrast floor.
+        ProjectStatus::Running => palette.accent_ink,
+        ProjectStatus::Starting | ProjectStatus::Stopping | ProjectStatus::Unhealthy => {
+            palette.warn
+        }
         ProjectStatus::Crashed => palette.danger,
         ProjectStatus::Stopped => palette.idle,
     }
@@ -1601,6 +1700,7 @@ fn status_label(status: ProjectStatus) -> &'static str {
     match status {
         ProjectStatus::Running => "Running",
         ProjectStatus::Starting => "Starting",
+        ProjectStatus::Stopping => "Stopping",
         ProjectStatus::Unhealthy => "Not responding",
         ProjectStatus::Crashed => "Crashed",
         ProjectStatus::Stopped => "Stopped",
@@ -1683,37 +1783,6 @@ fn parse_hex(value: &str) -> Option<Colour> {
     Some(theme::hex(n))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn initials_use_the_first_two_words() {
-        assert_eq!(initials("Junior Manage"), "JM");
-        assert_eq!(initials("app-tiktok"), "AT");
-        assert_eq!(initials("oracle"), "OR");
-        assert_eq!(initials(""), "?");
-    }
-
-    #[test]
-    fn hex_colours_from_the_config_are_parsed() {
-        let accent = parse_hex("#C15F3C").expect("should parse");
-        assert!((accent[0] - 193.0 / 255.0).abs() < 1e-5);
-
-        assert!(parse_hex("nonsense").is_none());
-        assert!(parse_hex("#FFF").is_none(), "short form is not supported");
-    }
-
-    #[test]
-    fn a_long_path_is_shortened_to_its_last_two_segments() {
-        assert_eq!(
-            short_path("C:\\Users\\alici\\Documents\\AppTiktok"),
-            "…/Documents/AppTiktok"
-        );
-        assert_eq!(short_path("C:/one"), "C:/one");
-    }
-}
-
 /// Formats and prints a diagnostic only when `ORACLE_DIAG` is set, so the formatting cost
 /// is not paid on every frame of a normal run.
 #[macro_export]
@@ -1767,6 +1836,24 @@ impl Oracle {
         Ui {
             frame: &mut self.frame,
             input: &mut self.input,
+            measure: Measure {
+                cache: &mut self.measured,
+                queue: &mut self.to_measure,
+            },
+            palette: self.palette,
+            dt,
+        }
+    }
+
+    /// The same, drawing into the tray panel's frame rather than the window's.
+    fn panel_ui(&mut self, dt: f32) -> Ui<'_> {
+        Ui {
+            frame: &mut self.panel_frame,
+            input: &mut self.input,
+            measure: Measure {
+                cache: &mut self.measured,
+                queue: &mut self.to_measure,
+            },
             palette: self.palette,
             dt,
         }
@@ -1795,7 +1882,7 @@ impl Oracle {
 
         {
             let mut ui = self.ui(dt);
-            leave = ui.icon_button("settings-close", back, "\u{2715}", false);
+            leave = ui.icon_button("settings-close", back, icons::CLOSE, false);
 
             let mut y = TITLEBAR + 84.0;
 
@@ -1912,7 +1999,7 @@ impl Oracle {
             let bin: Rect = [inner + content - 30.0, y, 30.0, 30.0];
             if self
                 .ui(dt)
-                .icon_button(&format!("root{index}"), bin, "\u{2715}", true)
+                .icon_button(&format!("root{index}"), bin, icons::TRASH, true)
             {
                 remove = Some(index);
             }
@@ -2030,7 +2117,7 @@ impl Oracle {
         );
 
         let back: Rect = [width - 44.0 - gap::XL, TITLEBAR + gap::XL, 30.0, 30.0];
-        let leave = self.ui(dt).icon_button("scan-close", back, "\u{2715}", false);
+        let leave = self.ui(dt).icon_button("scan-close", back, icons::CLOSE, false);
 
         let list_y = TITLEBAR + 84.0;
 
@@ -2398,15 +2485,11 @@ impl Oracle {
     /// Queues the string for measuring if it has not been seen, so the caret lands correctly
     /// from the second frame onwards.
     fn width_of(&mut self, value: &str) -> f32 {
-        match self.measured.get(value) {
-            Some(width) => *width,
-            None => {
-                if !self.to_measure.iter().any(|q| q == value) {
-                    self.to_measure.push(value.to_string());
-                }
-                0.0
-            }
+        Measure {
+            cache: &mut self.measured,
+            queue: &mut self.to_measure,
         }
+        .width(value, text::BASE, 400)
     }
 
     /// The add and edit form.
@@ -2462,7 +2545,7 @@ impl Oracle {
 
         {
             let mut ui = self.ui(dt);
-            leave = ui.icon_button("form-close", back, "\u{2715}", false);
+            leave = ui.icon_button("form-close", back, icons::CLOSE, false);
 
             changed |= ui.labelled_field(
                 "name",
@@ -3026,30 +3109,36 @@ impl Oracle {
 
             if project.local.is_some() {
                 let play: Rect = [width - 42.0, y + 9.0, 26.0, 26.0];
+                let settling =
+                    matches!(status, ProjectStatus::Starting | ProjectStatus::Stopping);
                 let play_response = self
                     .input
                     .interact(id("panelplay", &project.id), play, dt);
-                let lit = play_response.hover > 0.01 || live;
+                let lit = play_response.hover > 0.01 || live || settling;
 
-                self.panel_frame.fill(
+                self.panel_frame.fill_lifted(
                     play,
                     if lit {
                         palette.accent
                     } else {
-                        theme::fade(palette.accent, 0.18)
+                        theme::fade(palette.accent, 0.20)
                     },
                     radius::XS,
-                );
-                self.panel_frame.centred(
-                    if live { "\u{25A0}" } else { "\u{25B6}" },
-                    play[0] + 13.0,
-                    play[1] + 5.0,
-                    text::XS,
-                    if lit { [1.0, 1.0, 1.0, 1.0] } else { palette.accent },
-                    500,
+                    play_response.hover,
                 );
 
-                if play_response.clicked {
+                let centre = [play[0] + 13.0, play[1] + 13.0];
+                let ink = if lit { [1.0, 1.0, 1.0, 1.0] } else { palette.accent };
+
+                if settling {
+                    self.panel_ui(dt).spinner(centre, 13.0, ink);
+                } else if live {
+                    self.panel_frame.icon_solid(icons::STOP, centre, 9.0, ink);
+                } else {
+                    self.panel_frame.icon_solid(icons::PLAY, centre, 11.0, ink);
+                }
+
+                if play_response.clicked && !settling {
                     toggled = Some(project.id.clone());
                 }
             }
@@ -3067,23 +3156,18 @@ impl Oracle {
             .rule(0.0, footer - gap::SM, width, false, palette.line);
 
         let (open, quit) = {
-            let palette = self.palette;
-            let mut ui = Ui {
-                frame: &mut self.panel_frame,
-                input: &mut self.input,
-                palette,
-                dt,
-            };
-            let open = ui.button(
+            let mut ui = self.panel_ui(dt);
+            let open = ui.adorned_button(
                 "panel-open",
-                [gap::MD, footer, 120.0, 30.0],
+                [gap::MD, footer, 130.0, 30.0],
                 "Open Oracle",
                 Weight::Primary,
+                Adornment::Icon(icons::ARROW_OUT),
             );
             let quit = ui.icon_button(
                 "panel-quit",
                 [width - gap::MD - 30.0, footer, 30.0, 30.0],
-                "\u{23FB}",
+                icons::POWER,
                 false,
             );
             (open, quit)
@@ -3198,9 +3282,13 @@ impl Oracle {
 
                 let elapsed = self.started.elapsed().as_secs_f32();
                 let palette = self.palette;
-                if let (Some(gpu), Some(target)) = (self.gpu.as_ref(), self.panel_target.as_mut())
+                if let (Some(gpu), Some(target)) =
+                    (self.gpu.as_mut(), self.panel_target.as_mut())
                 {
-                    target.render(gpu, &self.panel_frame, &palette, elapsed);
+                    // A gentler wash. The pools are sized in fractions of the window, so at
+                    // 380 points across the panel would otherwise sit inside a single one and
+                    // read as a flat orange stripe rather than as a backdrop.
+                    target.render(gpu, &self.panel_frame, &palette, elapsed, 0.55);
                 }
 
                 self.input.end_frame();
@@ -3331,8 +3419,84 @@ impl Oracle {
         );
 
         let dismiss: Rect = [rect[0] + rect[2] - 36.0, rect[1] + 7.0, 30.0, 30.0];
-        if self.ui(dt).icon_button("notice", dismiss, "\u{2715}", false) {
+        if self.ui(dt).icon_button("notice", dismiss, icons::CLOSE, false) {
             self.notice = None;
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initials_use_the_first_two_words() {
+        assert_eq!(initials("Junior Manage"), "JM");
+        assert_eq!(initials("app-tiktok"), "AT");
+        assert_eq!(initials("oracle"), "OR");
+        assert_eq!(initials(""), "?");
+    }
+
+    #[test]
+    fn hex_colours_from_the_config_are_parsed() {
+        let accent = parse_hex("#C15F3C").expect("should parse");
+        assert!((accent[0] - 193.0 / 255.0).abs() < 1e-5);
+
+        assert!(parse_hex("nonsense").is_none());
+        assert!(parse_hex("#FFF").is_none(), "short form is not supported");
+    }
+
+    #[test]
+    fn a_long_path_is_shortened_to_its_last_two_segments() {
+        assert_eq!(
+            short_path("C:\\Users\\alici\\Documents\\AppTiktok"),
+            "…/Documents/AppTiktok"
+        );
+        assert_eq!(short_path("C:/one"), "C:/one");
+    }
+}
+
+/// Asks the desktop compositor to round a window's corners.
+///
+/// The window is undecorated, because Oracle draws its own title bar. Windows 11 rounds a
+/// *decorated* frame automatically and leaves an undecorated one square, which is why the
+/// first native build had four hard corners on a design built entirely out of rounded
+/// surfaces — the one shape on screen that nothing physical has.
+///
+/// Rounding it here rather than by drawing the corner ourselves gets the compositor's own
+/// antialiasing and the system drop shadow for free, and — more importantly — it clips the
+/// swap chain, so there is no seam between where the app stops painting and where the window
+/// actually ends. Drawing it would need a transparent composition swap chain, which costs a
+/// second set of driver allocations on this hardware.
+///
+/// Silently does nothing before Windows 11 build 22000: `DwmSetWindowAttribute` returns an
+/// error for an attribute it does not know, and a square window is a cosmetic loss, not a
+/// reason to fail to start.
+#[cfg(windows)]
+fn round_corners(window: &Window, small: bool) {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_ROUND: u32 = 2;
+    const DWMWCP_ROUNDSMALL: u32 = 3;
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(win32) = handle.as_ref() else {
+        return;
+    };
+
+    let preference: u32 = if small { DWMWCP_ROUNDSMALL } else { DWMWCP_ROUND };
+    unsafe {
+        windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            win32.hwnd.get() as windows_sys::Win32::Foundation::HWND,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            std::ptr::addr_of!(preference).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn round_corners(_window: &Window, _small: bool) {}

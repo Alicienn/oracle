@@ -4,6 +4,7 @@
 //! part of a browser genuinely not worth rewriting. Everything here is the layer that turns
 //! Oracle's idea of a line of text into what glyphon wants.
 
+use glyphon::cosmic_text::{FeatureTag, FontFeatures};
 use glyphon::{
     fontdb, Attrs, Buffer, Cache, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, Wrap,
@@ -238,71 +239,85 @@ impl TextLayer {
     }
 }
 
-/// The font families Oracle draws with, and nothing else.
+/// The typefaces Oracle draws with, embedded in the executable.
 ///
-/// `FontSystem::new()` loads every font installed on the machine. Measured here, that is
-/// **343 MB** of resident memory — by far the largest single allocation in the process, and
-/// more than the entire rest of the application. Oracle uses two families; loading the other
-/// four hundred is pure waste.
+/// The first native build asked Windows for Segoe UI Variable and fell back through whatever
+/// else happened to be installed. That is two problems. The obvious one is that the app looks
+/// different on different machines, and on a machine missing the Windows 11 face it falls
+/// back to Segoe UI, whose smaller x-height and looser spacing make the dense metric readouts
+/// noticeably harder to read. The subtler one is that Segoe UI was drawn for reading prose in
+/// Windows chrome — it has no tabular figures on by default, so a CPU percentage updating
+/// four times a second jitters sideways as its digits change width.
 ///
-/// Each family is listed with its fallbacks, newest first. Anything missing is skipped, and
-/// if the whole list comes up empty the system database is loaded after all — a blank window
-/// is a worse failure than a large one.
-const UI_FONTS: &[&str] = &[
-    // Windows 11's interface font, then the Windows 10 one.
-    "SegUIVar.ttf",
-    "segoeui.ttf",
-    "segoeuib.ttf",
-    "segoeuisl.ttf",
-    // Segoe UI carries no geometric shapes — a play triangle or a gear renders as tofu
-    // without this. Fallback only searches fonts that are in the database, so trimming the
-    // database to two families also trimmed away every symbol.
-    "seguisym.ttf",
+/// So the fonts ship with the binary instead:
+///
+/// - **Inter** (SIL Open Font Licence) for the interface. Designed for screens at small
+///   sizes, with a tall x-height and — switched on here — tabular figures, which is what
+///   stops a live number dancing.
+/// - **JetBrains Mono** (SIL Open Font Licence) for logs and paths.
+///
+/// Both are subset to Latin, Latin Extended-A, punctuation and arrows, which takes the four
+/// Inter cuts from 1.6 MB to 247 KB and JetBrains Mono from 270 KB to 21 KB. Licences are
+/// beside the files in `assets/fonts`.
+///
+/// # Why not the variable font
+///
+/// `InterVariable.ttf` is one 880 KB file covering every weight, which sounds strictly
+/// better. It is not, here: `fontdb` registers a variable face at its default instance, so
+/// asking for weight 600 gets weight 400 drawn and the interface loses its whole typographic
+/// hierarchy silently. Four static cuts are 247 KB and actually have the weights.
+const UI_FONTS: &[(&str, &[u8])] = &[
+    ("Inter Regular", include_bytes!("../../assets/fonts/Inter-Regular.ttf")),
+    ("Inter Medium", include_bytes!("../../assets/fonts/Inter-Medium.ttf")),
+    ("Inter SemiBold", include_bytes!("../../assets/fonts/Inter-SemiBold.ttf")),
+    ("Inter Bold", include_bytes!("../../assets/fonts/Inter-Bold.ttf")),
 ];
 
-const MONO_FONTS: &[&str] = &[
-    // Ships with Windows Terminal; Consolas is always present.
-    "CascadiaMono.ttf",
-    "CascadiaCode.ttf",
-    "consola.ttf",
-    "consolab.ttf",
-];
+const MONO_FONT: (&str, &[u8]) = (
+    "JetBrains Mono",
+    include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf"),
+);
+
+pub const UI_FAMILY: &str = "Inter";
+pub const MONO_FAMILY: &str = "JetBrains Mono";
 
 fn load_fonts() -> FontSystem {
-    let dir = std::path::Path::new(r"C:\Windows\Fonts");
+    // An empty database, filled only from what is embedded. `FontSystem::new()` loads every
+    // font installed on the machine, which measured 343 MB of resident memory here — more
+    // than the rest of the application put together, for four hundred families nothing draws.
     let mut db = fontdb::Database::new();
-    let mut loaded = 0;
 
-    for file in UI_FONTS.iter().chain(MONO_FONTS) {
-        let path = dir.join(file);
-        if path.is_file() && db.load_font_file(&path).is_ok() {
-            loaded += 1;
-        }
+    for (_, bytes) in UI_FONTS {
+        db.load_font_data(bytes.to_vec());
     }
+    db.load_font_data(MONO_FONT.1.to_vec());
 
-    eprintln!("[diag] loaded {loaded} font files");
-    if loaded == 0 {
-        // No recognised font on this machine. Fall back to the expensive path rather than
-        // rendering nothing at all.
-        return FontSystem::new();
-    }
+    db.set_sans_serif_family(UI_FAMILY);
+    db.set_monospace_family(MONO_FAMILY);
 
-    db.set_sans_serif_family("Segoe UI Variable Text");
-    db.set_monospace_family("Cascadia Mono");
+    eprintln!("[diag] loaded {} embedded font faces", db.len());
 
     FontSystem::new_with_locale_and_db("en-US".to_string(), db)
 }
 
 fn attrs(weight: u16, monospace: bool) -> Attrs<'static> {
     let family = if monospace {
-        // Cascadia ships with Windows Terminal and is the better of the two; Consolas is the
-        // fallback that is always present.
-        Family::Name("Cascadia Mono")
+        Family::Name(MONO_FAMILY)
     } else {
-        Family::Name("Segoe UI Variable Text")
+        Family::Name(UI_FAMILY)
     };
 
-    Attrs::new().family(family).weight(Weight(weight))
+    // Tabular figures. Without them a CPU percentage ticking from 9.9 to 10.1 shifts every
+    // character after it, and a column of memory readings does not line up — Inter's
+    // proportional digits are narrower for 1 than for 0. This is the whole reason the subset
+    // keeps the `tnum` feature table.
+    let mut features = FontFeatures::new();
+    features.enable(FeatureTag::new(b"tnum"));
+
+    Attrs::new()
+        .family(family)
+        .weight(Weight(weight))
+        .font_features(features)
 }
 
 fn colour(c: Colour) -> glyphon::Color {

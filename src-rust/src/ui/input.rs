@@ -69,6 +69,20 @@ pub struct Input {
     states: HashMap<Id, WidgetState>,
     /// Widgets touched this frame, so stale entries can be dropped.
     seen: Vec<Id>,
+
+    /// Springs for values widgets animate that are not hover or press: where a selection
+    /// indicator has slid to, how far a pane has opened, what a gauge currently reads.
+    ///
+    /// Kept here rather than in each widget because an immediate-mode widget is rebuilt
+    /// every frame and owns nothing between them. Keyed the same way hover is, and pruned
+    /// the same way, so a screen nobody visits stops costing memory once it is gone.
+    tracks: HashMap<Id, Animated<f32>>,
+    /// Tracks touched this frame.
+    tracked: Vec<Id>,
+
+    /// Seconds since the process started, for anything that rotates or pulses rather than
+    /// travelling to a target.
+    pub clock: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,11 +156,44 @@ impl Input {
         }
     }
 
+    /// Springs a named value towards a target and returns where it is now.
+    ///
+    /// The first call for an id snaps rather than springs. A selection indicator sliding in
+    /// from zero on the frame a screen opens is an animation of the layout arriving, not of
+    /// anything the user did, and it reads as a glitch.
+    pub fn animate(&mut self, key: Id, target: f32, spring: Spring, dt: f32) -> f32 {
+        self.tracked.push(key);
+
+        let track = self.tracks.entry(key).or_insert_with(|| {
+            Animated::new(target)
+                .with_motion(Motion::Spring(spring))
+                .with_epsilon(0.002)
+        });
+
+        track.set_target(target);
+        track.tick(dt);
+        track.get()
+    }
+
+    /// Springs four values at once, for a rectangle that travels.
+    pub fn animate_rect(&mut self, key: Id, target: Rect, spring: Spring, dt: f32) -> Rect {
+        // Four scalars rather than one `Animated<[f32; 4]>`: the components settle
+        // independently, so a pill that has reached its new x while still widening keeps
+        // moving instead of waiting for the slowest axis.
+        [
+            self.animate(key ^ 0x1, target[0], spring, dt),
+            self.animate(key ^ 0x2, target[1], spring, dt),
+            self.animate(key ^ 0x3, target[2], spring, dt),
+            self.animate(key ^ 0x4, target[3], spring, dt),
+        ]
+    }
+
     /// True while any widget is still animating, so the loop knows to ask for another frame.
     pub fn animating(&self) -> bool {
         self.states
             .values()
             .any(|s| !s.hover.is_settled() || !s.press.is_settled())
+            || self.tracks.values().any(|t| !t.is_settled())
     }
 
     /// Called at the end of a frame. Clears one-shot events and forgets widgets that were
@@ -174,6 +221,12 @@ impl Input {
             self.states.retain(|id, _| seen.contains(id));
         }
         self.seen.clear();
+
+        if self.tracked.len() < self.tracks.len() {
+            let tracked: std::collections::HashSet<Id> = self.tracked.iter().copied().collect();
+            self.tracks.retain(|id, _| tracked.contains(id));
+        }
+        self.tracked.clear();
     }
 
     pub fn pressed_key(&self, key: Key) -> bool {

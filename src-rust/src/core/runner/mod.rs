@@ -42,6 +42,14 @@ pub enum ProjectStatus {
     /// Spawned, but not yet serving on its declared port.
     Starting,
     Running,
+    /// Asked to exit, and still unwinding.
+    ///
+    /// Stopping a dev server is not instant: the tree is asked politely first and given
+    /// `GRACEFUL_STOP` to comply before it is forced, which on a Next.js project with a
+    /// watcher and a compiler holding file handles is routinely a second or two. Without
+    /// this state the interface has nothing to say during that window — it showed a running
+    /// project and a button that appeared to have done nothing.
+    Stopping,
     /// Alive, but never became reachable on its port.
     Unhealthy,
     /// Exited without being asked to.
@@ -227,6 +235,13 @@ impl ProcessManager {
 
         // Set before killing, so the exit watcher reports a clean stop rather than a crash.
         stop_flag.store(true, Ordering::SeqCst);
+
+        // Announced before the first signal rather than after the last, because the whole
+        // point of the state is to cover the wait.
+        if let Some(handle) = self.handles.read().get(project_id) {
+            *handle.status.write() = ProjectStatus::Stopping;
+        }
+        self.emit_status(project_id, ProjectStatus::Stopping);
         self.append_log(&ring, project_id, Stream::System, "Stopping…");
 
         kill_tree(pid, false).await;
