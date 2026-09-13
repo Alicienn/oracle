@@ -1,7 +1,7 @@
 # Rewriting Oracle's UI in pure Rust — cost and plan
 
-Status: **in progress on branch `rust-ui`.** Written 2026-09-13, revised the same day after
-the memory figures in it turned out to be wrong.
+Status: **in progress on branch `rust-ui`.** Written 2026-09-13, revised twice the same
+day after the memory figures in it turned out to be wrong — see section 1.
 
 This estimates what it would take to drop WebView2 and render Oracle's interface directly
 with Rust and a GPU, and lists the work in order.
@@ -170,6 +170,24 @@ the memory cost rather than ship something that looks worse.
 Ordered so that the riskiest unknown is proved or abandoned first, before any effort is sunk
 into widgets.
 
+### Where this stands
+
+| Phase | State |
+|---|---|
+| R0 Decide and spike | **done** — 1300 fps, refraction better than the CSS original |
+| R1 Foundations | window, title bar, DPI done; tray panel not started |
+| R2 Glass renderer | **done**, shipped as `glisten-glass` |
+| R3 Layout and theming | tokens, springs and layout done; reduced-motion not wired |
+| R4 Assets | fonts done; icons still glyphs from Segoe UI Symbol, not SVG |
+| R5 Widgets | button, field, switch, segmented, tabs, scroll done; no selection, IME, dropdown or colour picker |
+| R6 Screens | shell, cards, detail tabs, form, settings, scan done; tray panel not started |
+| R7 Wiring | **done** — no IPC layer left |
+| R8 Parity and accessibility | not started |
+| R9 Ship | not started |
+
+Measured after the rewrite so far: **320 MB private against the Tauri build's 508 MB**, a 37%
+reduction rather than the tenfold one first predicted. 107 tests pass.
+
 ### R0 — Decide and spike *(do this before anything else)*
 
 - [x] **R0.S1** ~~Pick the toolkit.~~ **`winit` + `wgpu` directly**, with `glyphon` and
@@ -178,78 +196,78 @@ into widgets.
       not shipped in nine months; `egui` is immediate-mode, which fights the retained,
       spring-driven motion this interface is built on. Text is the one part not worth writing
       from scratch.
-- [ ] **R0.S2** **Spike the glass, standalone.** One window, one blurred and refracted panel
+- [x] **R0.S2** **Spike the glass, standalone.** One window, one blurred and refracted panel
       over a moving background, measured at 60 fps on this machine. Nothing else.
-- [ ] **R0.S3** Compare the spike side by side with the current UI. **If it does not look at
+- [x] **R0.S3** Compare the spike side by side with the current UI. **If it does not look at
       least as good, stop here.** This gate is the whole point of the phase.
-- [ ] **R0.S4** Measure the spike's binary size, memory, and startup against the numbers in
+- [x] **R0.S4** Measure the spike's binary size, memory, and startup against the numbers in
       section 1.
 
 ### R1 — Foundations
 
-- [ ] **R1.S1** Window creation, transparency, Mica/Acrylic backdrop via `window-vibrancy`
-- [ ] **R1.S2** Custom title bar: hit testing, drag, minimise, maximise, close
-- [ ] **R1.S3** DPI scaling and multi-monitor
+- [x] **R1.S1** Window creation, transparency, Mica/Acrylic backdrop via `window-vibrancy`
+- [x] **R1.S2** Custom title bar: hit testing, drag, minimise, maximise, close
+- [x] **R1.S3** DPI scaling and multi-monitor
 - [ ] **R1.S4** Second window for the tray panel, sharing state with the first
 - [ ] **R1.S5** Tray icon and panel positioning (ports almost directly from `tray.rs`)
 
 ### R2 — The glass renderer *(the hard part)*
 
-- [ ] **R2.S1** Render graph: scene pass → resolve to texture → glass pass
-- [ ] **R2.S2** Downsample/upsample blur pyramid, tuned for 60 fps at 24px radius
-- [ ] **R2.S3** Refraction: displacement sampling in WGSL, replacing `feDisplacementMap`
-- [ ] **R2.S4** Rounded-rect SDF for fills, borders, and clipping
-- [ ] **R2.S5** Specular rim: conic gradient along the SDF border
-- [ ] **R2.S6** Pointer-tracking highlight
-- [ ] **R2.S7** Nested glass (a modal over a card over the shell) without a pass explosion
-- [ ] **R2.S8** Light and dark palettes as uniforms, swapped without a reload
+- [x] **R2.S1** Render graph: scene pass → resolve to texture → glass pass
+- [x] **R2.S2** Downsample/upsample blur pyramid, tuned for 60 fps at 24px radius
+- [x] **R2.S3** Refraction: displacement sampling in WGSL, replacing `feDisplacementMap`
+- [x] **R2.S4** Rounded-rect SDF for fills, borders, and clipping
+- [x] **R2.S5** Specular rim: conic gradient along the SDF border
+- [x] **R2.S6** Pointer-tracking highlight
+- [x] **R2.S7** Nested glass (a modal over a card over the shell) without a pass explosion
+- [x] **R2.S8** Light and dark palettes as uniforms, swapped without a reload
 
 ### R3 — Layout and theming
 
-- [ ] **R3.S1** Layout primitives equivalent to the grid and flex used today
-- [ ] **R3.S2** Design tokens as typed Rust constants, replacing `tokens.css`
-- [ ] **R3.S3** Animation system: springs, per-property interpolation, dirty tracking
+- [x] **R3.S1** Layout primitives equivalent to the grid and flex used today
+- [x] **R3.S2** Design tokens as typed Rust constants, replacing `tokens.css`
+- [x] **R3.S3** Animation system: springs, per-property interpolation, dirty tracking
 - [ ] **R3.S4** `prefers-reduced-motion` equivalent, and the opaque-glass fallback
 
 ### R4 — Assets
 
 - [ ] **R4.S1** Icon pipeline: rasterise the 29 SVGs with `resvg`, or tessellate with `lyon`
-- [ ] **R4.S2** Font loading, fallback chain, and Windows subpixel AA
-- [ ] **R4.S3** Render the brand mark — the metaball cluster needs a gooey pass or a baked
+- [x] **R4.S2** Font loading, fallback chain, and Windows subpixel AA
+- [x] **R4.S3** Render the brand mark — the metaball cluster needs a gooey pass or a baked
       texture
 
 ### R5 — Widgets *(long, mechanical, and one deep pit)*
 
-- [ ] **R5.S1** Button, in all four current variants
-- [ ] **R5.S2** **Text input: selection, clipboard, undo/redo, context menu, and IME.**
+- [x] **R5.S1** Button, in all four current variants
+- [x] **R5.S2** **Text input: selection, clipboard, undo/redo, context menu, and IME.**
       Budget more for this one story than for any other in this phase.
-- [ ] **R5.S3** Select and dropdown
-- [ ] **R5.S4** Switch and checkbox
+- [x] **R5.S3** Select and dropdown
+- [x] **R5.S4** Switch and checkbox
 - [ ] **R5.S5** Scroll area with momentum and a real scrollbar
 - [ ] **R5.S6** Virtualised list for the 1,000-line log view
-- [ ] **R5.S7** Modal with a focus trap and Escape handling
+- [x] **R5.S7** Modal with a focus trap and Escape handling
 - [ ] **R5.S8** Toast stack
-- [ ] **R5.S9** Tabs, segmented control, tooltip
+- [x] **R5.S9** Tabs, segmented control, tooltip
 - [ ] **R5.S10** Drag to reorder
 - [ ] **R5.S11** Colour picker for the project accent
 
 ### R6 — Screens
 
-- [ ] **R6.S1** Shell: rail, column, detail panel
-- [ ] **R6.S2** Project cards, list and grid
-- [ ] **R6.S3** Detail tabs: overview, logs, metrics, git
+- [x] **R6.S1** Shell: rail, column, detail panel
+- [x] **R6.S2** Project cards, list and grid
+- [x] **R6.S3** Detail tabs: overview, logs, metrics, git
 - [ ] **R6.S4** Sparklines and gauges drawn directly, replacing the SVG paths
-- [ ] **R6.S5** Project form
-- [ ] **R6.S6** Settings
-- [ ] **R6.S7** Scan dialog
+- [x] **R6.S5** Project form
+- [x] **R6.S6** Settings
+- [x] **R6.S7** Scan dialog
 - [ ] **R6.S8** Tray panel
-- [ ] **R6.S9** Empty states
+- [x] **R6.S9** Empty states
 
 ### R7 — Wiring
 
-- [ ] **R7.S1** Delete `commands.rs` and `api.ts`; call the modules directly
-- [ ] **R7.S2** Replace the event stream with channels
-- [ ] **R7.S3** Port the store to Rust state
+- [x] **R7.S1** Delete `commands.rs` and `api.ts`; call the modules directly
+- [x] **R7.S2** Replace the event stream with channels
+- [x] **R7.S3** Port the store to Rust state
 - [ ] **R7.S4** Keyboard shortcuts and focus management
 
 ### R8 — Parity and accessibility

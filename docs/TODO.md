@@ -2,7 +2,19 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-09-13 — complete. Installer built and verified running.
+Last updated: 2026-09-13 — the Tauri build is complete and shipped. Work has moved to the
+native Rust interface on branch `rust-ui`; its plan and progress live in
+[RUST-UI-REWRITE.md](RUST-UI-REWRITE.md).
+
+## Current state
+
+| Build | Where | State |
+|---|---|---|
+| Tauri (WebView2) | `main`, `src-tauri/` + `src/` | Complete, installer built, 70 tests |
+| Native Rust | `rust-ui`, `src-rust/` | In progress, 107 tests, no installer yet |
+
+The native build exists because the Tauri one costs **508 MB of private memory** on this
+machine — measured, after two wrong estimates. The native one currently costs 320 MB.
 
 ---
 
