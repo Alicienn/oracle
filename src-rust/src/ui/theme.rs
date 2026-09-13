@@ -24,6 +24,11 @@ pub const fn alpha(colour: Colour, a: f32) -> Colour {
     [colour[0], colour[1], colour[2], a]
 }
 
+/// The same colour with its opacity scaled, for fading a token in and out.
+pub fn fade(colour: Colour, factor: f32) -> Colour {
+    [colour[0], colour[1], colour[2], colour[3] * factor]
+}
+
 /// Light and dark share every value except the ones listed here, exactly as the two blocks
 /// in `tokens.css` did.
 #[derive(Debug, Clone, Copy, PartialEq)]

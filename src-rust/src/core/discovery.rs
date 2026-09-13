@@ -146,11 +146,35 @@ fn is_next_app(package_json: &Path) -> bool {
         .any(|block| value.get(block).and_then(|d| d.get("next")).is_some())
 }
 
-fn build_candidate(dir: &Path, kind: ProjectKind) -> Candidate {
-    let name = dir
+/// Folder names that say nothing about which project they belong to.
+///
+/// A scan of a real machine turns up three directories called `api` and two called
+/// `backend`. Importing those as-is gives a list nobody can read, so a generic name is
+/// qualified with its parent: `veln-leads/api` rather than `api`.
+const GENERIC: &[&str] = &[
+    "api", "app", "backend", "client", "frontend", "server", "web", "www", "src", "site",
+    "ui", "admin", "dashboard", "core", "main", "service", "services", "packages",
+];
+
+/// The name a discovered project should carry.
+pub fn display_name(dir: &Path) -> String {
+    let own = dir
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| dir.display().to_string());
+
+    if !GENERIC.contains(&own.to_lowercase().as_str()) {
+        return own;
+    }
+
+    match dir.parent().and_then(|p| p.file_name()) {
+        Some(parent) => format!("{}/{}", parent.to_string_lossy(), own),
+        None => own,
+    }
+}
+
+fn build_candidate(dir: &Path, kind: ProjectKind) -> Candidate {
+    let name = display_name(dir);
 
     Candidate {
         name,
@@ -334,14 +358,18 @@ mod tests {
     #[test]
     fn the_scan_skips_dependency_directories() {
         let tree = TempTree::new();
-        tree.file("app/package.json", r#"{ "name": "app" }"#);
+        // A distinctive name, so this tests the skip list rather than how names are chosen.
+        tree.file("apptiktok/package.json", r#"{ "name": "apptiktok" }"#);
         // A package nested inside node_modules must never surface as a project.
-        tree.file("app/node_modules/left-pad/package.json", r#"{ "name": "left-pad" }"#);
+        tree.file(
+            "apptiktok/node_modules/left-pad/package.json",
+            r#"{ "name": "left-pad" }"#,
+        );
 
         let found = scan(&[tree.path().to_path_buf()], &[]);
 
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].name, "app");
+        assert_eq!(found[0].name, "apptiktok");
     }
 
     #[test]
@@ -378,6 +406,46 @@ mod tests {
 
         let found = scan(&[tree.path().to_path_buf()], &known);
         assert!(found[0].already_known);
+    }
+
+    #[test]
+    fn a_distinctive_folder_name_is_left_alone() {
+        assert_eq!(display_name(Path::new("C:/dev/AppTiktok")), "AppTiktok");
+        assert_eq!(display_name(Path::new("C:/dev/oracle")), "oracle");
+    }
+
+    #[test]
+    fn a_generic_folder_name_is_qualified_by_its_parent() {
+        // A real scan turned up three directories called `api`. Unqualified, the import
+        // list is unusable.
+        assert_eq!(display_name(Path::new("C:/dev/veln-leads/api")), "veln-leads/api");
+        assert_eq!(display_name(Path::new("C:/dev/morlier/backend")), "morlier/backend");
+    }
+
+    #[test]
+    fn qualification_is_case_insensitive() {
+        assert_eq!(display_name(Path::new("C:/dev/thing/API")), "thing/API");
+        assert_eq!(display_name(Path::new("C:/dev/thing/Client")), "thing/Client");
+    }
+
+    #[test]
+    fn a_generic_name_with_no_parent_keeps_what_it_has() {
+        assert_eq!(display_name(Path::new("api")), "api");
+    }
+
+    #[test]
+    fn scanning_gives_sibling_projects_distinguishable_names() {
+        let tree = TempTree::new();
+        tree.file("alpha/api/package.json", "{}");
+        tree.file("beta/api/package.json", "{}");
+
+        let found = scan(&[tree.path().to_path_buf()], &[]);
+        let names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+
+        assert_eq!(names.len(), 2);
+        assert_ne!(names[0], names[1], "two projects called api is unusable");
+        assert!(names.contains(&"alpha/api"));
+        assert!(names.contains(&"beta/api"));
     }
 
     #[test]

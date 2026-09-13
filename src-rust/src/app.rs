@@ -21,6 +21,7 @@ use crate::ui::paint::{Frame, Rect};
 use crate::ui::renderer::Renderer;
 use crate::ui::text::{Align, Run};
 use crate::ui::theme::{self, gap, radius, text, Colour, GlassStyle, Palette};
+use crate::ui::widgets::{Ui, Weight};
 
 /// Height of the custom title bar, in logical pixels.
 const TITLEBAR: f32 = 42.0;
@@ -41,6 +42,24 @@ pub struct Oracle {
     selected: Option<String>,
     query: String,
     filter: Filter,
+    tab: Tab,
+    /// Which full-window screen is in front of the project list, if any.
+    screen: Screen,
+
+    /// Git status per project, read on demand rather than polled: it shells out, and a
+    /// repository does not change while nobody is looking at it.
+    git: HashMap<String, Option<crate::core::vcs::GitStatus>>,
+    /// Remote health per project, refreshed on its own interval.
+    remote: HashMap<String, crate::core::remote::RemoteStatus>,
+    health: Arc<parking_lot::Mutex<Vec<(String, crate::core::remote::RemoteStatus)>>>,
+    last_health: Instant,
+    http: reqwest::Client,
+
+    /// Candidates from the last folder scan, and which are ticked.
+    candidates: Vec<crate::core::discovery::Candidate>,
+    chosen: std::collections::HashSet<String>,
+    scanning: bool,
+    scan_result: Arc<parking_lot::Mutex<Option<Vec<crate::core::discovery::Candidate>>>>,
 
     /// Width of the detail pane, animated so opening it slides rather than snaps.
     detail: Animated<f32>,
@@ -73,6 +92,29 @@ enum Filter {
     Local,
     Remote,
     Running,
+}
+
+/// A pane of the project detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Overview,
+    Logs,
+    Metrics,
+    Git,
+}
+
+impl Tab {
+    const ALL: [Tab; 4] = [Tab::Overview, Tab::Logs, Tab::Metrics, Tab::Git];
+    const LABELS: [&'static str; 4] = ["Overview", "Logs", "Metrics", "Git"];
+}
+
+/// What occupies the window. Settings and the scanner take it over entirely rather than
+/// floating: at this size a modal over a modal is worse than a screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Screen {
+    Projects,
+    Settings,
+    Scan,
 }
 
 impl Filter {
@@ -123,6 +165,17 @@ impl Default for Oracle {
             selected: None,
             query: String::new(),
             filter: Filter::All,
+            tab: Tab::Overview,
+            screen: Screen::Projects,
+            git: HashMap::new(),
+            remote: HashMap::new(),
+            health: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            last_health: Instant::now() - Duration::from_secs(3600),
+            http: crate::core::remote::client(),
+            candidates: Vec::new(),
+            chosen: std::collections::HashSet::new(),
+            scanning: false,
+            scan_result: Arc::new(parking_lot::Mutex::new(None)),
             detail: Animated::new(0.0)
                 .with_motion(Motion::Spring(theme::motion::PANEL))
                 .with_epsilon(0.4),
@@ -155,7 +208,10 @@ impl Oracle {
                 Filter::All => true,
                 Filter::Local => p.local.is_some(),
                 Filter::Remote => p.remote.is_some(),
-                Filter::Running => false,
+                Filter::Running => matches!(
+                    self.statuses.get(&p.id),
+                    Some(ProjectStatus::Running | ProjectStatus::Starting)
+                ),
             })
             .filter(|p| {
                 query.is_empty()
@@ -265,14 +321,32 @@ impl Oracle {
     fn build(&mut self, width: f32, height: f32, dt: f32) {
         self.frame.clear();
         self.poll();
+        self.poll_health();
+        self.poll_scan();
+
+        self.titlebar(width, dt);
+
+        match self.screen {
+            Screen::Settings => {
+                self.settings_screen(width, height, dt);
+                self.frame
+                    .rule(0.0, TITLEBAR, width, false, self.palette.line);
+                return;
+            }
+            Screen::Scan => {
+                self.scan_screen(width, height, dt);
+                self.frame
+                    .rule(0.0, TITLEBAR, width, false, self.palette.line);
+                return;
+            }
+            Screen::Projects => {}
+        }
 
         let palette = self.palette;
         self.detail
             .set_target(if self.selected.is_some() { 380.0 } else { 0.0 });
         self.detail.tick(dt);
         let detail_width = self.detail.get();
-
-        self.titlebar(width, dt);
 
         let body_top = TITLEBAR;
         let body_height = height - TITLEBAR;
@@ -427,24 +501,29 @@ impl Oracle {
             y += 48.0;
         }
 
-        // Add and settings sit at the bottom of the rail.
+        // Scan and settings sit at the bottom of the rail.
         let bottom = top + height - gap::MD - 88.0;
-        for (index, glyph) in ["+", "\u{2699}"].iter().enumerate() {
-            let rect: Rect = [(RAIL - 40.0) * 0.5, bottom + index as f32 * 44.0, 40.0, 40.0];
-            let response = self.input.interact(id("railaction", glyph), rect, dt);
+        let mut go = None;
 
-            if response.hover > 0.01 {
-                self.frame
-                    .fill(rect, alpha_of(palette.line, response.hover), radius::MD);
+        for (index, (key, glyph, screen)) in [
+            ("rail-scan", "\u{2315}", Screen::Scan),
+            ("rail-settings", "\u{2699}", Screen::Settings),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let rect: Rect = [(RAIL - 40.0) * 0.5, bottom + index as f32 * 44.0, 40.0, 40.0];
+            if self.ui(dt).icon_button(key, rect, glyph, false) {
+                go = Some(*screen);
             }
-            self.frame.centred(
-                *glyph,
-                rect[0] + 20.0,
-                rect[1] + 9.0,
-                text::MD,
-                palette.muted,
-                500,
-            );
+        }
+
+        if let Some(screen) = go {
+            self.screen = screen;
+            self.scroll = 0.0;
+            if screen == Screen::Scan && self.candidates.is_empty() {
+                self.start_scan();
+            }
         }
     }
 
@@ -517,39 +596,62 @@ impl Oracle {
             fx += seg_width;
         }
 
-        // Scan and add.
-        let mut ax = seg_rect[0] + seg_rect[2] + gap::SM;
-        for (key, glyph, primary) in [("scan", "\u{2318}", false), ("add", "+", true)] {
-            let rect: Rect = [ax, row_y, 48.0, 34.0];
-            let response = self.input.interact(id("action", key), rect, dt);
+        // Run-everything, scan, and add.
+        let ax = seg_rect[0] + seg_rect[2] + gap::SM;
+        let anyone_running = self
+            .statuses
+            .values()
+            .any(|s| matches!(s, ProjectStatus::Running | ProjectStatus::Starting));
 
-            if primary {
-                let lift = response.hover * 0.12;
-                self.frame.fill(
-                    rect,
-                    [
-                        palette.accent[0] + lift,
-                        palette.accent[1] + lift,
-                        palette.accent[2] + lift,
-                        1.0,
-                    ],
-                    radius::SM,
-                );
-            } else {
-                self.frame
-                    .panel(rect, GlassStyle::control(&palette), 1.0);
-            }
-
-            self.frame.centred(
-                glyph,
-                rect[0] + 24.0,
-                rect[1] + 8.0,
-                text::MD,
-                if primary { [1.0, 1.0, 1.0, 1.0] } else { palette.ink_soft },
-                600,
+        let (toggle_all, scan, _add) = {
+            let mut ui = self.ui(dt);
+            let toggle_all = ui.button(
+                "toggle-all",
+                [ax, row_y, 56.0, 34.0],
+                if anyone_running { "\u{25A0}" } else { "\u{25B6}" },
+                Weight::Secondary,
             );
+            let scan = ui.button(
+                "toolbar-scan",
+                [ax + 64.0, row_y, 56.0, 34.0],
+                "\u{2315}",
+                Weight::Secondary,
+            );
+            let add = ui.button(
+                "toolbar-add",
+                [ax + 128.0, row_y, 56.0, 34.0],
+                "+",
+                Weight::Primary,
+            );
+            (toggle_all, scan, add)
+        };
 
-            ax += 56.0;
+        if toggle_all {
+            // Start everything local that is idle, or stop everything that is not.
+            let ids: Vec<String> = self
+                .config
+                .projects
+                .iter()
+                .filter(|p| p.local.is_some())
+                .map(|p| p.id.clone())
+                .collect();
+
+            for id in ids {
+                let live = matches!(
+                    self.status_of(&id),
+                    ProjectStatus::Running | ProjectStatus::Starting
+                );
+                if live == anyone_running {
+                    self.toggle(&id);
+                }
+            }
+        }
+        if scan {
+            self.screen = Screen::Scan;
+            self.scroll = 0.0;
+            if self.candidates.is_empty() {
+                self.start_scan();
+            }
         }
     }
 
@@ -732,8 +834,11 @@ impl Oracle {
         self.frame.rule(x, y, height, true, palette.line);
 
         let inner = x + gap::LG;
+        let content_width = width - gap::LG * 2.0;
         let accent = self.accent_of(&project);
+        let status = self.status_of(&project.id);
 
+        // Header.
         let tile: Rect = [inner, y + gap::LG, 34.0, 34.0];
         self.frame.fill(tile, accent, radius::SM);
         self.frame.centred(
@@ -746,11 +851,12 @@ impl Oracle {
         );
 
         self.frame.text(
-            Run::new(&project.name, inner + 46.0, y + gap::LG + 2.0, text::MD, palette.ink)
-                .weight(640),
+            Run::new(&project.name, inner + 46.0, y + gap::LG + 1.0, text::MD, palette.ink)
+                .weight(640)
+                .width(content_width - 100.0),
         );
         self.frame.label(
-            project.kind.label(),
+            status_label(status),
             inner + 46.0,
             y + gap::LG + 22.0,
             text::SM,
@@ -758,49 +864,299 @@ impl Oracle {
         );
 
         let close: Rect = [x + width - 44.0, y + gap::LG, 30.0, 30.0];
-        let close_response = self.input.interact(id("detail", "close"), close, dt);
-        if close_response.hover > 0.01 {
-            self.frame
-                .fill(close, alpha_of(palette.line, close_response.hover), radius::SM);
-        }
-        self.frame.centred(
-            "\u{2715}",
-            close[0] + 15.0,
-            close[1] + 7.0,
-            text::SM,
-            palette.muted,
-            500,
-        );
-        if close_response.clicked {
-            self.selected = None;
-        }
+        let tabs_y = y + 68.0;
+        let selected_tab = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
 
-        // Key/value rows.
-        let mut row_y = y + 82.0;
-        let mut row = |frame: &mut Frame, label: &str, value: String| {
-            frame.label(label, inner, row_y, text::SM, palette.muted);
-            frame.text(
-                Run::new(value, inner + 104.0, row_y, text::BASE, palette.ink)
-                    .width(width - 104.0 - gap::LG * 2.0),
-            );
-            row_y += 26.0;
+        let (closed, picked) = {
+            let mut ui = self.ui(dt);
+            let closed = ui.icon_button("detail-close", close, "\u{2715}", false);
+            let picked = ui.tabs("tab", inner, tabs_y, &Tab::LABELS, selected_tab);
+            (closed, picked)
         };
 
+        if closed {
+            self.selected = None;
+            return;
+        }
+        if let Some(index) = picked {
+            self.tab = Tab::ALL[index];
+            // Git shells out, so it is read when the pane is opened rather than polled.
+            if self.tab == Tab::Git {
+                self.read_git(&project);
+            }
+        }
+
+        self.frame
+            .rule(x, tabs_y + 36.0, width, false, palette.line);
+
+        let body_y = tabs_y + 36.0 + gap::LG;
+        let body_height = height - (body_y - y) - gap::LG;
+
+        match self.tab {
+            Tab::Overview => self.overview_tab(&project, inner, body_y, content_width, dt),
+            Tab::Logs => self.logs_tab(&project, inner, body_y, content_width, body_height),
+            Tab::Metrics => self.metrics_tab(&project, inner, body_y, content_width),
+            Tab::Git => self.git_tab(&project, inner, body_y, content_width),
+        }
+    }
+
+    fn overview_tab(&mut self, project: &Project, x: f32, y: f32, width: f32, dt: f32) {
+        let status = self.status_of(&project.id);
+        let live = matches!(status, ProjectStatus::Running | ProjectStatus::Starting);
+        let url = open_url(project);
+
+        // Actions.
+        let mut actions: Vec<(&str, String)> = Vec::new();
+        if project.local.is_some() {
+            actions.push(("toggle", if live { "Stop" } else { "Start" }.to_string()));
+        }
+        if url.is_some() {
+            actions.push(("open", "Open".to_string()));
+        }
+        if project.local.is_some() {
+            actions.push(("folder", "Folder".to_string()));
+        }
+
+        let mut clicked = None;
+        {
+            let mut ui = self.ui(dt);
+            let mut cursor = x;
+            for (key, label) in &actions {
+                let rect: Rect = [cursor, y, 86.0, 30.0];
+                let weight = if *key == "toggle" && !live {
+                    Weight::Primary
+                } else {
+                    Weight::Secondary
+                };
+                if ui.button(key, rect, label, weight) {
+                    clicked = Some(*key);
+                }
+                cursor += 94.0;
+            }
+        }
+
+        match clicked {
+            Some("toggle") => {
+                let id = project.id.clone();
+                self.toggle(&id);
+            }
+            Some("open") => {
+                if let Some(url) = url.clone() {
+                    open_in_browser(&url);
+                }
+            }
+            Some("folder") => {
+                if let Some(local) = &project.local {
+                    reveal(&local.root);
+                }
+            }
+            _ => {}
+        }
+
+        // Facts.
+        let mut row_y = y + 46.0;
+        let mut rows: Vec<(String, String)> = vec![("Type".into(), project.kind.label().into())];
+
         if let Some(local) = &project.local {
-            row(&mut self.frame, "Folder", short_path(&local.root.to_string_lossy()));
-            row(&mut self.frame, "Command", local.command.clone());
+            rows.push(("Folder".into(), short_path(&local.root.to_string_lossy())));
+            rows.push((
+                "Command".into(),
+                if local.command.is_empty() {
+                    "not set".into()
+                } else {
+                    local.command.clone()
+                },
+            ));
             if let Some(port) = local.port {
-                row(&mut self.frame, "Port", port.to_string());
+                rows.push(("Port".into(), port.to_string()));
+            }
+            if !local.env.is_empty() {
+                rows.push((
+                    "Environment".into(),
+                    format!("{} variables", local.env.len()),
+                ));
             }
         }
         if let Some(remote) = &project.remote {
-            row(&mut self.frame, "Health check", remote.url.clone());
+            rows.push(("Health check".into(), remote.url.clone()));
+            rows.push((
+                "Remote".into(),
+                describe_remote(self.remote.get(&project.id)),
+            ));
         }
         if let Some(repo) = &project.repo {
             if let Some(slug) = &repo.slug {
-                row(&mut self.frame, "Repository", slug.clone());
+                rows.push(("Repository".into(), slug.clone()));
             }
         }
+        if let Some(pid) = self.runner.pid(&project.id) {
+            rows.push(("Process id".into(), pid.to_string()));
+        }
+
+        let mut ui = self.ui(dt);
+        for (label, value) in &rows {
+            ui.row(x, row_y, width, label, value);
+            row_y += 26.0;
+        }
+    }
+
+    fn logs_tab(&mut self, project: &Project, x: f32, y: f32, width: f32, height: f32) {
+        let palette = self.palette;
+        let lines = self.runner.logs(&project.id, None);
+
+        if lines.is_empty() {
+            let message = if matches!(self.status_of(&project.id), ProjectStatus::Stopped) {
+                "Nothing yet. Start the project to see its output."
+            } else {
+                "Waiting for output…"
+            };
+            let mut ui = self.ui(0.0);
+            ui.placeholder(x, y + 20.0, width, message);
+            return;
+        }
+
+        // The last screenful, newest at the bottom. A log pane that does not follow the tail
+        // is a log pane nobody reads.
+        let row_height = 17.0;
+        let visible = ((height / row_height).floor() as usize).max(1);
+        let start = lines.len().saturating_sub(visible);
+
+        for (index, line) in lines[start..].iter().enumerate() {
+            let ly = y + index as f32 * row_height;
+            let ink = match line.stream {
+                crate::core::runner::logs::Stream::Stderr => palette.danger,
+                crate::core::runner::logs::Stream::System => palette.accent,
+                _ => palette.ink_soft,
+            };
+
+            self.frame.text(
+                Run::new(format!("{:04}", line.seq), x, ly, text::SM, palette.muted).monospace(),
+            );
+            self.frame.text(
+                Run::new(&line.text, x + 40.0, ly, text::SM, ink)
+                    .monospace()
+                    .clip([x, y, width, height]),
+            );
+        }
+    }
+
+    fn metrics_tab(&mut self, project: &Project, x: f32, y: f32, width: f32) {
+        let palette = self.palette;
+        let Some(sample) = self.usage.get(&project.id).copied() else {
+            let mut ui = self.ui(0.0);
+            ui.placeholder(
+                x,
+                y + 20.0,
+                width,
+                "No measurements. Metrics are collected while a project runs.",
+            );
+            return;
+        };
+
+        let gauge_width = (width - gap::MD) * 0.5;
+        for (index, (label, value)) in [
+            ("CPU across the process tree", percent(sample.cpu)),
+            ("Memory", bytes(sample.memory)),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let rect: Rect = [x + (gauge_width + gap::MD) * index as f32, y, gauge_width, 84.0];
+            self.frame
+                .panel(rect, GlassStyle::sunken(&palette), 1.0);
+            self.frame.text(
+                Run::new(value, rect[0] + gap::MD, rect[1] + 14.0, text::XL, palette.ink)
+                    .weight(640),
+            );
+            self.frame.text(
+                Run::new(*label, rect[0] + gap::MD, rect[1] + 52.0, text::SM, palette.muted)
+                    .width(gauge_width - gap::MD * 2.0),
+            );
+        }
+
+        let mut ui = self.ui(0.0);
+        ui.row(x, y + 104.0, width, "Processes", &sample.processes.to_string());
+        ui.heading(x, y + 140.0, "How this is measured");
+        ui.placeholder(
+            x,
+            y + 160.0,
+            width,
+            "CPU is percent of one core, summed over every descendant, so a project using four cores reads 400%.",
+        );
+    }
+
+    fn git_tab(&mut self, project: &Project, x: f32, y: f32, width: f32) {
+        let status = self.git.get(&project.id).cloned();
+
+        let mut ui = self.ui(0.0);
+        match status {
+            None => ui.placeholder(x, y + 20.0, width, "Reading…"),
+            Some(None) => ui.placeholder(
+                x,
+                y + 20.0,
+                width,
+                if project.local.is_some() {
+                    "This folder is not a git repository."
+                } else {
+                    "This project has no local folder to inspect."
+                },
+            ),
+            Some(Some(git)) => {
+                let mut row_y = y;
+                ui.row(
+                    x,
+                    row_y,
+                    width,
+                    "Branch",
+                    git.branch.as_deref().unwrap_or("detached HEAD"),
+                );
+                row_y += 26.0;
+
+                if let Some(upstream) = &git.upstream {
+                    ui.row(x, row_y, width, "Upstream", upstream);
+                    row_y += 26.0;
+                }
+
+                let sync = if git.ahead > 0 || git.behind > 0 {
+                    format!("{} ahead, {} behind", git.ahead, git.behind)
+                } else if git.upstream.is_some() {
+                    "In sync".to_string()
+                } else {
+                    "No upstream".to_string()
+                };
+                ui.row(x, row_y, width, "Sync", &sync);
+                row_y += 26.0;
+
+                let worktree = if git.dirty_files == 0 {
+                    "Clean".to_string()
+                } else {
+                    format!(
+                        "{} changed file{}",
+                        git.dirty_files,
+                        if git.dirty_files == 1 { "" } else { "s" }
+                    )
+                };
+                ui.row(x, row_y, width, "Worktree", &worktree);
+                row_y += 26.0;
+
+                if let Some(commit) = &git.last_commit {
+                    ui.row(x, row_y, width, "Last commit", &commit.hash);
+                    row_y += 26.0;
+                    ui.row(x, row_y, width, "Message", &commit.subject);
+                    row_y += 26.0;
+                    ui.row(x, row_y, width, "Author", &commit.author);
+                }
+            }
+        }
+    }
+
+    /// Reads git status for a project, once, when its pane is opened.
+    fn read_git(&mut self, project: &Project) {
+        let status = project
+            .local
+            .as_ref()
+            .and_then(|local| crate::core::vcs::status(&local.root).ok().flatten());
+        self.git.insert(project.id.clone(), status);
     }
 }
 
@@ -935,7 +1291,11 @@ impl ApplicationHandler for Oracle {
                 match &event.logical_key {
                     WinitKey::Named(NamedKey::Escape) => {
                         self.input.keys.push(Key::Escape);
-                        if self.selected.is_some() {
+                        // Back out one level at a time: screen, then selection.
+                        if self.screen != Screen::Projects {
+                            self.screen = Screen::Projects;
+                            self.scroll = 0.0;
+                        } else if self.selected.is_some() {
                             self.selected = None;
                         }
                     }
@@ -1178,4 +1538,617 @@ pub fn probe(stage: &str) {
             process.memory() as f64 / 1_048_576.0
         );
     }
+}
+
+impl Oracle {
+    /// Borrows the frame and the input together, which is what a control needs.
+    fn ui(&mut self, dt: f32) -> Ui<'_> {
+        Ui {
+            frame: &mut self.frame,
+            input: &mut self.input,
+            palette: self.palette,
+            dt,
+        }
+    }
+
+    /// Full-window settings.
+    fn settings_screen(&mut self, width: f32, height: f32, dt: f32) {
+        let palette = self.palette;
+        let settings = self.config.settings.clone();
+
+        let inner = gap::XL;
+        let content = (width - gap::XL * 2.0).min(620.0);
+
+        self.frame.text(
+            Run::new("Settings", inner, TITLEBAR + gap::XL, text::LG, palette.ink).weight(640),
+        );
+
+        let back: Rect = [width - 44.0 - gap::XL, TITLEBAR + gap::XL, 30.0, 30.0];
+        let mut changed: Option<Settings> = None;
+        let leave;
+        let theme_pick;
+        let glass_pick;
+        // Carried out of the borrow below rather than recomputed from a sum of constants,
+        // which is how the version label ended up on top of the Add button.
+        let mut cursor;
+
+        {
+            let mut ui = self.ui(dt);
+            leave = ui.icon_button("settings-close", back, "\u{2715}", false);
+
+            let mut y = TITLEBAR + 84.0;
+
+            ui.heading(inner, y, "Appearance");
+            y += 26.0;
+            theme_pick = ui.segmented(
+                "theme",
+                [inner, y, 240.0, 32.0],
+                &["Light", "Dark", "System"],
+                match settings.theme {
+                    Theme::Light => 0,
+                    Theme::Dark => 1,
+                    Theme::System => 2,
+                },
+            );
+            y += 48.0;
+
+            glass_pick = ui.segmented(
+                "glass",
+                [inner, y, 240.0, 32.0],
+                &["Full", "Reduced", "Opaque"],
+                match settings.glass {
+                    GlassLevel::Full => 0,
+                    GlassLevel::Reduced => 1,
+                    GlassLevel::Opaque => 2,
+                },
+            );
+            y += 56.0;
+
+            ui.heading(inner, y, "Startup");
+            y += 26.0;
+
+            let mut next = settings.clone();
+            let mut touched = false;
+
+            if let Some(value) = ui.toggle(
+                "start-windows",
+                inner,
+                y,
+                content,
+                "Start with Windows",
+                "Registers Oracle in the startup list. No administrator rights needed.",
+                settings.start_with_windows,
+            ) {
+                next.start_with_windows = value;
+                touched = true;
+            }
+            y += 54.0;
+
+            if let Some(value) = ui.toggle(
+                "start-hidden",
+                inner,
+                y,
+                content,
+                "Start hidden in the tray",
+                "Comes up as a tray icon only, without opening the window.",
+                settings.start_hidden,
+            ) {
+                next.start_hidden = value;
+                touched = true;
+            }
+            y += 54.0;
+
+            if let Some(value) = ui.toggle(
+                "autostart-projects",
+                inner,
+                y,
+                content,
+                "Launch flagged projects",
+                "Starts every project marked to run when Oracle starts.",
+                settings.autostart_projects,
+            ) {
+                next.autostart_projects = value;
+                touched = true;
+            }
+            y += 54.0;
+
+            if let Some(value) = ui.toggle(
+                "minimise-tray",
+                inner,
+                y,
+                content,
+                "Close to tray",
+                "Closing the window keeps Oracle running.",
+                settings.minimise_to_tray,
+            ) {
+                next.minimise_to_tray = value;
+                touched = true;
+            }
+            y += 70.0;
+
+            ui.heading(inner, y, "Folders to scan");
+            cursor = y + 26.0;
+
+            if touched {
+                changed = Some(next);
+            }
+        }
+
+        // Scan roots are drawn outside the `Ui` borrow, because removing one mutates config.
+        let mut remove = None;
+        let mut y = cursor;
+        let roots = settings.scan_roots.clone();
+
+        if roots.is_empty() {
+            self.ui(dt).placeholder(
+                inner,
+                y,
+                content,
+                "No folders yet. Add the directories your projects live in.",
+            );
+            y += 30.0;
+        }
+
+        for (index, root) in roots.iter().enumerate() {
+            let label = root.to_string_lossy().to_string();
+            self.frame
+                .label(label, inner, y + 6.0, text::BASE, palette.ink_soft);
+
+            let bin: Rect = [inner + content - 30.0, y, 30.0, 30.0];
+            if self
+                .ui(dt)
+                .icon_button(&format!("root{index}"), bin, "\u{2715}", true)
+            {
+                remove = Some(index);
+            }
+            self.frame
+                .rule(inner, y + 36.0, content, false, palette.line);
+            y += 44.0;
+        }
+
+        let add: Rect = [inner, y + gap::SM, 160.0, 32.0];
+        let add_clicked = self
+            .ui(dt)
+            .button("add-root", add, "Add Documents", Weight::Secondary);
+
+        self.frame.label(
+            format!("Oracle {}", env!("CARGO_PKG_VERSION")),
+            inner,
+            (add[1] + add[3] + gap::XL).max(height - 34.0),
+            text::SM,
+            palette.muted,
+        );
+
+        if let Some(index) = theme_pick {
+            let mut next = self.config.settings.clone();
+            next.theme = [Theme::Light, Theme::Dark, Theme::System][index];
+            self.apply_settings(next);
+        }
+        if let Some(index) = glass_pick {
+            let mut next = self.config.settings.clone();
+            next.glass = [GlassLevel::Full, GlassLevel::Reduced, GlassLevel::Opaque][index];
+            self.apply_settings(next);
+        }
+        if let Some(next) = changed {
+            self.apply_settings(next);
+        }
+        if let Some(index) = remove {
+            let mut next = self.config.settings.clone();
+            next.scan_roots.remove(index);
+            self.apply_settings(next);
+        }
+        if add_clicked {
+            if let Some(home) = dirs::home_dir() {
+                let documents = home.join("Documents");
+                if documents.is_dir() {
+                    let mut next = self.config.settings.clone();
+                    if !next.scan_roots.contains(&documents) {
+                        next.scan_roots.push(documents);
+                        self.apply_settings(next);
+                    }
+                }
+            }
+        }
+        if leave {
+            self.screen = Screen::Projects;
+            self.scroll = 0.0;
+        }
+    }
+
+    /// Applies a settings change and writes it straight to disk.
+    ///
+    /// No save button: every control here takes effect the moment it is touched, and the
+    /// config is small enough that persisting on each change costs nothing.
+    fn apply_settings(&mut self, settings: Settings) {
+        let theme_changed = settings.theme != self.config.settings.theme;
+        let glass_changed = settings.glass != self.config.settings.glass;
+        let autostart_changed = settings.start_with_windows
+            != self.config.settings.start_with_windows
+            || settings.start_hidden != self.config.settings.start_hidden;
+
+        self.config.settings = settings;
+
+        if theme_changed {
+            self.palette = match self.config.settings.theme {
+                Theme::Light => Palette::LIGHT,
+                _ => Palette::DARK,
+            };
+        }
+        if glass_changed {
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_blur(match self.config.settings.glass {
+                    GlassLevel::Full => Blur::Standard,
+                    GlassLevel::Reduced => Blur::Light,
+                    GlassLevel::Opaque => Blur::None,
+                });
+            }
+        }
+        if autostart_changed {
+            if let Err(err) = crate::core::autostart::set(
+                self.config.settings.start_with_windows,
+                self.config.settings.start_hidden,
+            ) {
+                eprintln!("Oracle could not change the startup entry: {err}");
+            }
+        }
+
+        if let Err(err) = config::save(&self.config) {
+            eprintln!("Oracle could not save the settings: {err}");
+        }
+    }
+
+    /// Full-window folder scan.
+    fn scan_screen(&mut self, width: f32, height: f32, dt: f32) {
+        let palette = self.palette;
+        let inner = gap::XL;
+        let content = width - gap::XL * 2.0;
+
+        self.frame.text(
+            Run::new("Find projects", inner, TITLEBAR + gap::XL, text::LG, palette.ink)
+                .weight(640),
+        );
+
+        let back: Rect = [width - 44.0 - gap::XL, TITLEBAR + gap::XL, 30.0, 30.0];
+        let leave = self.ui(dt).icon_button("scan-close", back, "\u{2715}", false);
+
+        let list_y = TITLEBAR + 84.0;
+
+        if self.scanning {
+            self.ui(dt).placeholder(inner, list_y, content, "Scanning…");
+        } else if self.config.settings.scan_roots.is_empty() {
+            self.ui(dt).placeholder(
+                inner,
+                list_y,
+                content,
+                "No folders are set to be scanned. Add one under Settings, then rescan.",
+            );
+        } else if self.candidates.is_empty() {
+            self.ui(dt).placeholder(
+                inner,
+                list_y,
+                content,
+                "Nothing found in the folders Oracle scans.",
+            );
+        } else {
+            let summary = format!(
+                "Found {} project{}. Pick the ones to add.",
+                self.candidates.len(),
+                if self.candidates.len() == 1 { "" } else { "s" }
+            );
+            self.frame
+                .label(summary, inner, list_y, text::SM, palette.muted);
+
+            let rows: Vec<(String, String, String, bool)> = self
+                .candidates
+                .iter()
+                .map(|c| {
+                    (
+                        c.root.to_string_lossy().to_string(),
+                        c.name.clone(),
+                        format!(
+                            "{} · {}",
+                            short_path(&c.root.to_string_lossy()),
+                            if c.suggested_command.is_empty() {
+                                "no command"
+                            } else {
+                                c.suggested_command.as_str()
+                            }
+                        ),
+                        c.already_known,
+                    )
+                })
+                .collect();
+
+            let top = list_y + 28.0;
+            let viewport = height - 90.0 - top;
+
+            // Twenty-eight candidates do not fit on one screen; without this only the first
+            // nine were reachable and the rest were silently unimportable.
+            let overflow = (rows.len() as f32 * 50.0 - viewport).max(0.0);
+            self.scroll = (self.scroll - self.input.scroll).clamp(0.0, overflow);
+
+            let mut y = top - self.scroll;
+            let mut toggled = None;
+
+            for (key, name, detail, known) in rows {
+                if y + 44.0 < top {
+                    y += 50.0;
+                    continue;
+                }
+                if y > top + viewport {
+                    break;
+                }
+
+                let rect: Rect = [inner, y, content, 44.0];
+                let ticked = self.chosen.contains(&key);
+                let response = self.input.interact(id("cand", &key), rect, dt);
+
+                if !known && response.hover > 0.01 {
+                    self.frame.fill(
+                        rect,
+                        theme::fade(palette.line, response.hover * 0.6),
+                        radius::SM,
+                    );
+                }
+
+                // A tick box drawn rather than glyphed, so it cannot vanish with a font.
+                let box_rect: Rect = [inner + 6.0, y + 13.0, 18.0, 18.0];
+                self.frame.fill(
+                    box_rect,
+                    if ticked { palette.accent } else { palette.line_strong },
+                    radius::XS,
+                );
+                if ticked {
+                    self.frame.dot(
+                        [box_rect[0] + 9.0, box_rect[1] + 9.0],
+                        8.0,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                }
+
+                let ink = if known { palette.muted } else { palette.ink };
+                self.frame
+                    .text(Run::new(name, inner + 36.0, y + 5.0, text::BASE, ink).weight(560));
+                self.frame
+                    .label(detail, inner + 36.0, y + 24.0, text::SM, palette.muted);
+
+                if known {
+                    self.frame.label(
+                        "Already added",
+                        inner + content - 110.0,
+                        y + 14.0,
+                        text::XS,
+                        palette.muted,
+                    );
+                } else if response.clicked {
+                    toggled = Some(key.clone());
+                }
+
+                y += 50.0;
+            }
+
+            if let Some(key) = toggled {
+                if !self.chosen.remove(&key) {
+                    self.chosen.insert(key);
+                }
+            }
+        }
+
+        let footer = height - 54.0;
+        self.frame
+            .rule(0.0, footer - gap::MD, width, false, palette.line);
+
+        let count = self.chosen.len();
+        let add_label = if count == 0 {
+            "Add selected".to_string()
+        } else {
+            format!("Add {count} project{}", if count == 1 { "" } else { "s" })
+        };
+
+        let (rescan, add) = {
+            let mut ui = self.ui(dt);
+            let rescan = ui.button(
+                "rescan",
+                [inner, footer, 100.0, 32.0],
+                "Rescan",
+                Weight::Secondary,
+            );
+            let add = ui.button(
+                "import",
+                [width - gap::XL - 170.0, footer, 170.0, 32.0],
+                &add_label,
+                Weight::Primary,
+            );
+            (rescan, add)
+        };
+
+        if rescan {
+            self.start_scan();
+        }
+        if add && count > 0 {
+            self.import_chosen();
+        }
+        if leave {
+            self.screen = Screen::Projects;
+            self.scroll = 0.0;
+        }
+    }
+
+    /// Kicks off a folder scan on a worker thread.
+    ///
+    /// Walking a disk blocks for as long as it takes, so it must never run on the frame.
+    fn start_scan(&mut self) {
+        if self.scanning {
+            return;
+        }
+        self.scanning = true;
+        self.candidates.clear();
+        self.chosen.clear();
+
+        let roots = self.config.settings.scan_roots.clone();
+        let known: Vec<std::path::PathBuf> = self
+            .config
+            .projects
+            .iter()
+            .filter_map(|p| p.local.as_ref().map(|l| l.root.clone()))
+            .collect();
+        let slot = self.scan_result.clone();
+
+        self.runtime.spawn_blocking(move || {
+            let found = crate::core::discovery::scan(&roots, &known);
+            *slot.lock() = Some(found);
+        });
+    }
+
+    /// Turns the ticked candidates into projects.
+    fn import_chosen(&mut self) {
+        let mut order = self.config.projects.len() as i32;
+
+        for candidate in &self.candidates {
+            let key = candidate.root.to_string_lossy().to_string();
+            if !self.chosen.contains(&key) {
+                continue;
+            }
+
+            let mut project = Project::new(candidate.name.clone());
+            project.kind = candidate.kind;
+            project.repo = candidate.repo.clone();
+            project.order = order;
+
+            let mut local =
+                LocalTarget::new(candidate.root.clone(), candidate.suggested_command.clone());
+            local.port = candidate.suggested_port;
+            project.local = Some(local);
+
+            self.config.projects.push(project);
+            order += 1;
+        }
+
+        self.chosen.clear();
+        if let Err(err) = config::save(&self.config) {
+            eprintln!("Oracle could not save the imported projects: {err}");
+        }
+        self.screen = Screen::Projects;
+    }
+
+    /// Collects finished health checks and starts a round if one is due.
+    fn poll_health(&mut self) {
+        for (project_id, status) in self.health.lock().drain(..) {
+            self.remote.insert(project_id, status);
+        }
+
+        let interval =
+            Duration::from_secs(self.config.settings.health_interval_secs.max(5) as u64);
+        if self.last_health.elapsed() < interval {
+            return;
+        }
+        self.last_health = Instant::now();
+
+        let targets: Vec<(String, RemoteTarget)> = self
+            .config
+            .projects
+            .iter()
+            .filter_map(|p| p.remote.as_ref().map(|r| (p.id.clone(), r.clone())))
+            .collect();
+
+        if targets.is_empty() {
+            return;
+        }
+
+        let client = self.http.clone();
+        let slot = self.health.clone();
+
+        self.runtime.spawn(async move {
+            // Concurrent, so ten dead hosts cost one timeout rather than ten in sequence.
+            let checks: Vec<_> = targets
+                .into_iter()
+                .map(|(id, target)| {
+                    let client = client.clone();
+                    tokio::spawn(async move {
+                        let status = crate::core::remote::check(&client, &target).await;
+                        (id, status)
+                    })
+                })
+                .collect();
+
+            for handle in checks {
+                if let Ok(result) = handle.await {
+                    slot.lock().push(result);
+                }
+            }
+        });
+    }
+
+    /// Collects a finished scan.
+    fn poll_scan(&mut self) {
+        if let Some(found) = self.scan_result.lock().take() {
+            self.candidates = found;
+            self.scanning = false;
+        }
+    }
+}
+
+/// Where a project's "open" button should point.
+fn open_url(project: &Project) -> Option<String> {
+    if let Some(local) = &project.local {
+        if let Some(url) = &local.open_url {
+            return Some(url.clone());
+        }
+        if let Some(port) = local.port {
+            return Some(format!("http://localhost:{port}"));
+        }
+    }
+    project.remote.as_ref().map(|r| r.url.clone())
+}
+
+fn describe_remote(status: Option<&crate::core::remote::RemoteStatus>) -> String {
+    use crate::core::remote::RemoteStatus;
+    match status {
+        Some(RemoteStatus::Up { ms, .. }) => format!("Up · {ms} ms"),
+        Some(RemoteStatus::Degraded { code, ms }) => format!("HTTP {code} · {ms} ms"),
+        Some(RemoteStatus::Down { reason }) => reason.clone(),
+        _ => "Not checked yet".to_string(),
+    }
+}
+
+/// Opens a URL in the user's browser.
+///
+/// Restricted to http and https, the same rule the web build's opener scope enforced: never
+/// a path, and never a custom scheme that could hand something to another program.
+#[cfg(windows)]
+fn open_in_browser(url: &str) {
+    use std::os::windows::process::CommandExt;
+
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        eprintln!("Oracle refused to open {url}: only http and https are allowed");
+        return;
+    }
+
+    let mut command = std::process::Command::new("cmd");
+    command.raw_arg(format!("/C start \"\" \"{url}\""));
+    command.creation_flags(0x0800_0000);
+    let _ = command.spawn();
+}
+
+#[cfg(not(windows))]
+fn open_in_browser(url: &str) {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return;
+    }
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+/// Reveals a folder in the system file manager.
+#[cfg(windows)]
+fn reveal(path: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new("explorer");
+    command.arg(path);
+    command.creation_flags(0x0800_0000);
+    let _ = command.spawn();
+}
+
+#[cfg(not(windows))]
+fn reveal(path: &std::path::Path) {
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
