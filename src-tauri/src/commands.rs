@@ -70,6 +70,26 @@ fn resolved_icon(state: &AppState, project: &Project) -> IconSource {
     }
 }
 
+/// The address to send anyone who wants to look at this project.
+///
+/// Not simply the configured one. A project that hit a port collision and was started on the
+/// alternative Oracle offered is serving somewhere its own settings do not mention, so while
+/// it is running the runner is the authority on where. An explicitly configured `openUrl`
+/// still wins: someone who wrote an address meant it.
+fn resolved_url(state: &AppState, project: &Project) -> Option<String> {
+    let local = project.local.as_ref();
+
+    if let Some(explicit) = local.and_then(|l| l.open_url.as_ref()) {
+        return Some(explicit.clone());
+    }
+
+    if let Some(port) = state.runner.port(&project.id) {
+        return Some(format!("http://localhost:{port}"));
+    }
+
+    project.open_url()
+}
+
 fn view(state: &AppState, project: &Project) -> ProjectView {
     ProjectView {
         status: state.runner.status(&project.id),
@@ -85,7 +105,7 @@ fn view(state: &AppState, project: &Project) -> ProjectView {
             .clone()
             .unwrap_or_else(|| project.kind.accent().to_string()),
         resolved_icon: resolved_icon(state, project),
-        resolved_url: project.open_url(),
+        resolved_url: resolved_url(state, project),
         kind_label: project.kind.label().to_string(),
         project: project.clone(),
     }
@@ -462,10 +482,12 @@ pub fn reveal_folder(path: PathBuf) -> Result<()> {
 /// `rect` is where the frontend has room for it, in the coordinates
 /// `getBoundingClientRect` reports. The webview is a native surface that knows nothing about
 /// the layout around it, so every later change of shape has to be reported too.
+// Async on purpose: creating a window blocks until the main thread has done it, and a
+// synchronous command is already on that thread.
 #[tauri::command]
-pub fn open_embed(
+pub async fn open_embed(
     app: AppHandle,
-    state: St,
+    state: St<'_>,
     project_id: String,
     rect: embed::Rect,
 ) -> Result<()> {
@@ -475,8 +497,10 @@ pub fn open_embed(
             .project(&project_id)
             .ok_or_else(|| OracleError::ProjectNotFound(project_id.clone()))?;
 
-        project
-            .open_url()
+        // The resolved address, not the configured one: a project started on an alternative
+        // port after a collision is serving somewhere its own settings do not mention, and
+        // opening the configured address would show an error page for a healthy project.
+        resolved_url(&state, project)
             .ok_or_else(|| OracleError::NoRemoteTarget(project.name.clone()))?
     };
 
@@ -517,6 +541,18 @@ pub struct PanelAnchor {
     pub height: f64,
 }
 
+/// Opens the webview's developer tools.
+///
+/// Oracle is a tool for people who run dev servers; when its own interface misbehaves, the
+/// console is the first thing to want and there was no way to reach it in a packaged build.
+/// Bound to Ctrl+Shift+I, which is where every browser puts it.
+#[tauri::command]
+pub fn open_devtools(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        window.open_devtools();
+    }
+}
+
 #[tauri::command]
 pub fn show_main_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -524,6 +560,9 @@ pub fn show_main_window(app: AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+
+    // The web app was hidden with the window; it comes back with it.
+    embed::follow_owner(&app);
 
     // Opening the full app should dismiss the panel it was opened from.
     panel::hide(&app);

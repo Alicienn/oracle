@@ -4,6 +4,29 @@ Every released version has a section here, and the release script refuses to pub
 that does not: an update that cannot say what it changed is an update nobody has a reason to
 accept. The section for the running version is what Oracle shows after it updates itself.
 
+## 0.3.1
+
+- The embedded web app panel actually renders. In 0.3.0 it did not: the page loaded, a
+  renderer ran, and the panel stayed black. Multiple webviews in one window are meant to
+  *partition* it, and Oracle's own webview already covers the whole client area, so the child
+  landed behind it. The web app now gets its own undecorated window, owned by the main one —
+  always above its owner — kept over the panel as the window moves, resizes, is minimised or
+  goes to the tray.
+- A project started on an alternative port after a collision is opened at the port it is
+  actually serving. Both the in-app panel and the browser button used to send you to the port
+  the project was refused.
+- A project that is running but answering nothing says so, instead of handing over
+  WebView2's own "cannot reach this page" — and names the usual cause, which is a project
+  serving a different port than the one in its settings.
+- Opening a web app is verified rather than assumed: if the window does not appear, that is
+  reported. An empty panel that says nothing is how the 0.3.0 fault hid.
+- Ctrl+Shift+I opens the interface's own developer tools. Oracle is a tool for people who run
+  dev servers, and when its own window misbehaved there was no way to reach a console in a
+  packaged build.
+- Correction to 0.3.0's note on permissions: scoping them to webviews is defence in depth,
+  not a hole closed. A remote origin has no IPC access to begin with unless a capability
+  explicitly grants it.
+
 ## 0.3.0
 
 - Project web apps open inside Oracle. Pressing start on a project that serves a page shows

@@ -27,11 +27,12 @@ export type Tab = "overview" | "logs" | "metrics" | "git";
  * How far along showing a project's web app is.
  *
  * `launching` while the project boots, `ready` for the beat after its port answers, `open`
- * once the webview is on screen, `failed` when it never came up. The pause between `ready`
- * and `open` is deliberate: a web app shown the instant its port accepts a connection is
- * usually still compiling, and lands on a blank page or an error.
+ * once the webview is on screen, `failed` when it never came up, and `unreachable` for a
+ * project that is alive but whose address answers nothing. The pause between `ready` and
+ * `open` is deliberate: a web app shown the instant its port accepts a connection is usually
+ * still compiling, and lands on a blank page or an error.
  */
-export type EmbedPhase = "launching" | "ready" | "open" | "failed";
+export type EmbedPhase = "launching" | "ready" | "open" | "failed" | "unreachable";
 
 export interface EmbedState {
   projectId: string;

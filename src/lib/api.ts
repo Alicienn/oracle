@@ -308,6 +308,9 @@ export const api = {
   closeEmbed: (projectId: string) => invoke<void>("close_embed", { projectId }),
   reloadEmbed: () => invoke<void>("reload_embed"),
 
+  /** The webview's own console, for when the interface is the thing misbehaving. */
+  openDevtools: () => invoke<void>("open_devtools"),
+
   /** Drops a project's cached icon and fetches it again. */
   refreshFavicon: (projectId: string) => invoke<void>("refresh_favicon", { projectId }),
 

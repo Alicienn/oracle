@@ -329,6 +329,15 @@ impl ProcessManager {
         self.handles.read().get(project_id).map(|h| h.pid)
     }
 
+    /// The port this run actually holds, which is not always the one configured.
+    ///
+    /// A start that hit a collision and accepted the offered alternative is serving
+    /// somewhere else entirely. Anything that builds an address for a running project has to
+    /// ask here, or it sends the user to the port the project was refused.
+    pub fn port(&self, project_id: &str) -> Option<u16> {
+        self.handles.read().get(project_id).and_then(|h| h.port)
+    }
+
     /// Buffered log lines, optionally only those newer than `since`.
     pub fn logs(&self, project_id: &str, since: Option<u64>) -> Vec<LogLine> {
         self.handles

@@ -87,6 +87,7 @@ pub fn run() {
             commands::set_embed_bounds,
             commands::close_embed,
             commands::reload_embed,
+            commands::open_devtools,
             commands::show_main_window,
             commands::hide_panel,
             commands::quit_app,
@@ -143,6 +144,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
+            // A web app is an owned window with its own screen position and visibility, so
+            // it has to be told every time the main window moves, resizes, or goes away.
+            // `follow_owner` decides from the current state, so it does not matter which.
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) if window.label() == "main" => {
+                embed::follow_owner(window.app_handle());
+            }
             // Closing the main window sends Oracle to the tray; quitting is explicit.
             WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
                 let minimise = window
@@ -154,6 +161,8 @@ pub fn run() {
                 if minimise {
                     api.prevent_close();
                     let _ = window.hide();
+                    // Or the page stays on screen with nothing behind it.
+                    embed::follow_owner(window.app_handle());
                 }
             }
             // The panel behaves like a popover: losing focus dismisses it, and its webview
@@ -169,6 +178,8 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // Best effort: children are killed on the way out so no dev server is
                 // left running with no way to reach it.
+                embed::close_all(handle);
+
                 if let Some(state) = handle.try_state::<Arc<AppState>>() {
                     let runner = state.runner.clone();
                     tauri::async_runtime::block_on(async move {

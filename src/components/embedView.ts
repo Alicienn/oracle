@@ -59,6 +59,14 @@ export async function openWebApp(project: ProjectView): Promise<void> {
   // earns an "already running" error and a toast nobody asked for.
   const held = remoteOnly || isLive(project.status, get().pending[project.id]);
 
+  // A project whose port never answered is alive and unreachable. Opening its address would
+  // hand the user WebView2's own "cannot reach this page", which says nothing about why —
+  // so the panel says it instead, and names the usual cause.
+  if (project.status === "unhealthy") {
+    patch({ embed: { projectId: project.id, phase: "unreachable" }, selectedId: null });
+    return;
+  }
+
   patch({
     embed: {
       projectId: project.id,
@@ -193,17 +201,50 @@ function body(project: ProjectView, phase: string): HTMLElement {
     return h("div", { class: "webapp__host", id: "webapp-host" });
   }
 
-  if (phase === "failed") {
+  if (phase === "failed" || phase === "unreachable") {
+    const unreachable = phase === "unreachable";
+
     return h(
       "div",
       { class: "webapp__stage" },
       iconTile(project, 56),
-      h("strong", null, `${project.name} did not come up`),
-      h("p", null, "Its logs are in the project's Logs tab."),
-      button({
-        label: "Back to projects",
-        onClick: () => void leaveWebApp(),
-      }),
+      h(
+        "strong",
+        null,
+        unreachable
+          ? `${project.name} is running but not answering`
+          : `${project.name} did not come up`,
+      ),
+      h(
+        "p",
+        null,
+        unreachable
+          ? `Nothing is listening on ${project.resolvedUrl}. The usual cause is the project serving a different port than the one in its settings.`
+          : "Its logs say why.",
+      ),
+      h(
+        "div",
+        { class: "row" },
+        button({
+          label: "Project settings",
+          onClick: () => {
+            void leaveWebApp();
+            patch({ selectedId: project.id, tab: "overview" });
+          },
+        }),
+        button({
+          label: "Logs",
+          onClick: () => {
+            void leaveWebApp();
+            patch({ selectedId: project.id, tab: "logs" });
+          },
+        }),
+        button({
+          label: "Back to projects",
+          variant: "ghost",
+          onClick: () => void leaveWebApp(),
+        }),
+      ),
     );
   }
 
@@ -322,8 +363,14 @@ export function watchLaunches(): void {
       return;
     }
 
-    if (project.status === "crashed" || project.status === "unhealthy") {
+    if (project.status === "crashed") {
       patch({ embed: { ...embed, phase: "failed" } });
+      return;
+    }
+
+    // Alive, but its port never opened: a different failure, and a different answer.
+    if (project.status === "unhealthy") {
+      patch({ embed: { ...embed, phase: "unreachable" } });
     }
   });
 }

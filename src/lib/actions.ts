@@ -44,6 +44,11 @@ export async function start(project: ProjectView, port?: number): Promise<void> 
 
   try {
     await api.start(project.id, port);
+
+    // The runner now knows things the view was built without: the pid, and the port this
+    // run actually holds — which is not the configured one when a collision was resolved by
+    // accepting another. Without this the address shown, and opened, is the wrong one.
+    await refreshProjects();
   } catch (error) {
     clearPending(project.id);
     // Back to what it was, not to "stopped". A refused start says nothing about the

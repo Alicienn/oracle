@@ -7,6 +7,7 @@
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { api } from "./lib/api";
 import type { ViewMode } from "./lib/api";
 import { h, fill, icon, qs, debounce } from "./lib/dom";
 import { brandMark, icons } from "./lib/icons";
@@ -262,6 +263,13 @@ function bindShortcuts(): void {
     const typing =
       event.target instanceof HTMLElement &&
       ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName);
+
+    // Where every browser puts it, and the only way into the console in a packaged build.
+    if (event.ctrlKey && event.shiftKey && (event.key === "I" || event.key === "i")) {
+      event.preventDefault();
+      void api.openDevtools();
+      return;
+    }
 
     // Ctrl+F and "/" both focus search, the two conventions users arrive with.
     if ((event.ctrlKey && event.key === "f") || (!typing && event.key === "/")) {

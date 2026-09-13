@@ -61,6 +61,8 @@ fn show_main<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.set_focus();
     }
     panel::hide(app);
+    // The web app was hidden with the window; it comes back with it.
+    crate::embed::follow_owner(app);
 }
 
 fn quit_app<R: Runtime>(app: &AppHandle<R>) {
