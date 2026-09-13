@@ -501,6 +501,74 @@ textarea {
     inset 0 0 0 1px var(--accent);
 }
 
+/*
+ * A project that is up.
+ *
+ * The status dot already says so, but a dot is something you read one card at a time. The
+ * question actually being asked of this list is "what is running right now", and an edge
+ * carries that across eight cards at a glance, without anyone having to look twice.
+ *
+ * An edge rather than a tint: the cards are glass, and a background that changes with state
+ * fights the material. Selection still wins — a full accent rim — because that is about
+ * where the user is rather than what the machine is doing.
+ *
+ * A real element, not a pseudo: both of the card's pseudo-elements belong to the glass
+ * system, which paints the specular rim in `::before` and the pointer highlight in
+ * `::after`.
+ */
+.card__running {
+  position: absolute;
+  left: 0;
+  top: var(--gap-3);
+  bottom: var(--gap-3);
+  width: 2px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  /* Grows out of nothing when a project comes up, rather than blinking into place. */
+  animation: running-edge var(--t-panel) var(--spring);
+}
+
+@keyframes running-edge {
+  from {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+}
+
+/*
+ * The keyboard's position, in the design system's own terms.
+ *
+ * Cards and panel rows carry their own buttons, so they are containers with `tabindex`
+ * rather than buttons — which left them with the browser's default outline, a foreign
+ * rectangle on a glass surface. `:focus-visible` keeps it to keyboard use: it must not fire
+ * on a mouse click, which already has the hover state to show where it is.
+ */
+.rail__item:focus-visible,
+.btn:focus-visible,
+.chip:focus-visible,
+.filters button:focus-visible,
+.tabs button:focus-visible,
+.window-controls button:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-wash);
+}
+
+/*
+ * A card keeps its elevation while focused.
+ *
+ * `box-shadow` is one property: stating only the focus ring would drop the two shadows that
+ * hold the card off the page, so a card would appear to flatten the moment it is tabbed to.
+ * The glass shadows are repeated here for that reason, not by accident.
+ */
+.card:focus-visible {
+  outline: none;
+  box-shadow:
+    var(--shadow-near),
+    var(--shadow-far),
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px var(--accent-wash);
+}
+
 .card__body {
   min-width: 0;
 }

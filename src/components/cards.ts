@@ -94,6 +94,8 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
       // slide to its new row instead of being destroyed and recreated in place.
       dataset: { selected: String(selected), key: project.id },
     },
+    // The accent edge that makes a running project readable without looking at its dot.
+    live ? h("span", { class: "card__running", "aria-hidden": "true" }) : null,
     iconTile(project, 34),
     h(
       "div",
