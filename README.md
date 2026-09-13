@@ -30,9 +30,12 @@ Produces `src-tauri/target/release/bundle/nsis/Oracle_0.1.0_x64-setup.exe`.
 ## Releases and updating
 
 Oracle updates itself. It asks
-`https://github.com/Alicienn/oracle/releases/latest/download/latest.json` at launch, offers
-whatever is newer than the running build, and installs it only if the user accepts. The check
-can be turned off in Settings.
+`https://github.com/Alicienn/oracle/releases/latest/download/latest.json` at launch, and an
+available update puts a line in the title bar rather than a dialog over whatever you opened
+the app to do. Clicking it downloads in place; installing is a separate, explicit step,
+because the installer replaces Oracle and anything Oracle is running has to be stopped
+first — the dialog names those projects before you agree. The check can be turned off in
+Settings.
 
 Cutting a release is pushing a tag; [the workflow](.github/workflows/release.yml) builds the
 installer, signs it, and publishes it:

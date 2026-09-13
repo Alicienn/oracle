@@ -10,7 +10,11 @@
  * never declared a length — the ring has nothing to measure and spins instead.
  */
 
-const SIZE = 72;
+/**
+ * The geometry is fixed and the element is scaled by the `viewBox`, so one set of numbers
+ * serves both the dialog's ring and the small one in the title bar.
+ */
+const BOX = 72;
 const RADIUS = 30;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
@@ -26,22 +30,22 @@ export interface Ring {
   succeed(): void;
 }
 
-export function progressRing(): Ring {
+export function progressRing(size = BOX): Ring {
   const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 
   node.setAttribute("class", "ring");
-  node.setAttribute("viewBox", `0 0 ${SIZE} ${SIZE}`);
-  node.setAttribute("width", String(SIZE));
-  node.setAttribute("height", String(SIZE));
+  node.setAttribute("viewBox", `0 0 ${BOX} ${BOX}`);
+  node.setAttribute("width", String(size));
+  node.setAttribute("height", String(size));
   node.setAttribute("aria-hidden", "true");
   node.dataset.state = "waiting";
 
   // The arc is rotated so that it grows from twelve o'clock, where a reader expects a dial
   // to start, rather than from three.
   node.innerHTML = `
-    <circle class="ring__track" cx="${SIZE / 2}" cy="${SIZE / 2}" r="${RADIUS}"/>
-    <circle class="ring__arc" cx="${SIZE / 2}" cy="${SIZE / 2}" r="${RADIUS}"
-      transform="rotate(-90 ${SIZE / 2} ${SIZE / 2})"
+    <circle class="ring__track" cx="${BOX / 2}" cy="${BOX / 2}" r="${RADIUS}"/>
+    <circle class="ring__arc" cx="${BOX / 2}" cy="${BOX / 2}" r="${RADIUS}"
+      transform="rotate(-90 ${BOX / 2} ${BOX / 2})"
       stroke-dasharray="${CIRCUMFERENCE.toFixed(2)}"
       stroke-dashoffset="${CIRCUMFERENCE.toFixed(2)}"/>
     <path class="ring__tick" d="${TICK}"

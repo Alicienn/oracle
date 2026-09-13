@@ -8,7 +8,7 @@ import { get, reportError, saveSettings } from "../lib/store";
 import { brandMark } from "../lib/icons";
 import { button, segmented, toggleRow } from "./common";
 import { closeModal, showModal } from "./modal";
-import { showUpdatePrompt } from "./updatePrompt";
+import { mountUpdateChip } from "./updateChip";
 import { checkNow } from "../lib/updates";
 
 export function showSettings(): void {
@@ -230,9 +230,11 @@ export function showSettings(): void {
         return;
       }
 
+      // Straight to the title-bar indicator, which is the one place an available update
+      // is ever shown: two routes to the same offer would be two things to keep in step.
       updateStatus.textContent = "";
       closeModal();
-      showUpdatePrompt(update, get().version);
+      mountUpdateChip(update);
     },
   });
 

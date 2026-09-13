@@ -37,7 +37,7 @@ import { showProjectForm } from "./components/projectForm";
 import { showSettings } from "./components/settings";
 import { showScan } from "./components/scan";
 import { isModalOpen } from "./components/modal";
-import { showUpdatePrompt } from "./components/updatePrompt";
+import { mountUpdateChip } from "./components/updateChip";
 import { findUpdate } from "./lib/updates";
 
 const appWindow = getCurrentWindow();
@@ -284,12 +284,13 @@ void main();
  * Looks for a new release once, at launch.
  *
  * After the first render and the performance probe, so a slow or unreachable release feed
- * cannot delay the window appearing. Silent when the app is current or the check fails —
- * Settings is where someone who wants an answer goes to ask.
+ * cannot delay the window appearing. An update puts a line in the title bar and nothing
+ * more: whoever just opened Oracle opened it to do something else. Silent when the app is
+ * current or the check fails — Settings is where someone who wants an answer goes to ask.
  */
 async function offerUpdate(): Promise<void> {
   if (!get().settings.checkUpdates) return;
 
   const update = await findUpdate();
-  if (update) showUpdatePrompt(update, get().version);
+  if (update) mountUpdateChip(update);
 }
