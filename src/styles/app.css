@@ -307,6 +307,39 @@ textarea {
   box-shadow: var(--shadow-near);
 }
 
+/*
+ * A control whose selection travels.
+ *
+ * The pressed background moves to a single element that slides between the options, so the
+ * buttons themselves keep only their colour change. Opt-in — a control rebuilt on every
+ * render has no previous position to slide from, and would look identical for more work.
+ */
+.filters--pill {
+  position: relative;
+}
+
+.filters--pill button {
+  position: relative;
+  z-index: 1;
+}
+
+.filters--pill button[aria-pressed="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  border-radius: var(--r-sm);
+  background: var(--glass-tint-strong);
+  box-shadow: var(--shadow-near);
+  /* Hinted because it moves on every filter change and nothing else in the control does. */
+  will-change: transform;
+}
+
 .list {
   flex: 1;
   min-height: 0;

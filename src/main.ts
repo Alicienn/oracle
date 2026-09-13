@@ -11,6 +11,7 @@ import type { ViewMode } from "./lib/api";
 import { h, fill, icon, qs, debounce } from "./lib/dom";
 import { brandMark, icons } from "./lib/icons";
 import { installGlass, probePerformance } from "./lib/glass";
+import { fluidList, slidingPill } from "./lib/motion";
 import {
   connect,
   get,
@@ -22,7 +23,12 @@ import {
   type Filter,
 } from "./lib/store";
 import { startAll, stopAll } from "./lib/actions";
-import { button, segmented } from "./components/common";
+import {
+  button,
+  segmented,
+  setButtonIcon,
+  setSegmentedValue,
+} from "./components/common";
 import { renderRail } from "./components/rail";
 import { renderList } from "./components/cards";
 import { renderDetail } from "./components/detail";
@@ -101,37 +107,54 @@ function renderSearch(): void {
   );
 }
 
-function renderToolbar(): void {
+/**
+ * The toolbar, built once.
+ *
+ * It used to be rebuilt on every state change, which is once a second from the metrics
+ * tick. That cost nothing visible but it also made the selection highlight impossible to
+ * animate: a control replaced between renders has no previous position to travel from.
+ * Everything that varies is now updated in place by `syncToolbar`.
+ */
+let filterControl: HTMLElement;
+let viewControl: HTMLElement;
+let powerButton: HTMLButtonElement;
+
+function buildToolbar(): void {
   const state = get();
-  const anyRunning = state.projects.some(
-    (project) => project.status === "running" || project.status === "starting",
+
+  filterControl = segmented<Filter>(
+    [
+      { value: "all", label: "All" },
+      { value: "local", label: "Local" },
+      { value: "remote", label: "Remote" },
+      { value: "running", label: "Running" },
+    ],
+    state.filter,
+    (filter) => patch({ filter }),
+    true,
   );
+
+  viewControl = segmented<ViewMode>(
+    [
+      { value: "list", label: "", iconName: "list", title: "List view" },
+      { value: "grid", label: "", iconName: "grid", title: "Grid view" },
+    ],
+    state.settings.view,
+    (view) => void saveSettings({ view }),
+    true,
+  );
+
+  powerButton = button({
+    iconName: "play",
+    title: "Start every local project",
+    onClick: () => void (anyRunning() ? stopAll() : startAll()),
+  });
 
   fill(
     toolbarControls,
-    segmented<Filter>(
-      [
-        { value: "all", label: "All" },
-        { value: "local", label: "Local" },
-        { value: "remote", label: "Remote" },
-        { value: "running", label: "Running" },
-      ],
-      state.filter,
-      (filter) => patch({ filter }),
-    ),
-    segmented<ViewMode>(
-      [
-        { value: "list", label: "", iconName: "list", title: "List view" },
-        { value: "grid", label: "", iconName: "grid", title: "Grid view" },
-      ],
-      state.settings.view,
-      (view) => void saveSettings({ view }),
-    ),
-    button({
-      iconName: anyRunning ? "stop" : "play",
-      title: anyRunning ? "Stop everything" : "Start every local project",
-      onClick: () => void (anyRunning ? stopAll() : startAll()),
-    }),
+    filterControl,
+    viewControl,
+    powerButton,
     button({ iconName: "scan", title: "Find projects", onClick: showScan }),
     button({
       iconName: "plus",
@@ -142,15 +165,58 @@ function renderToolbar(): void {
   );
 }
 
+function anyRunning(): boolean {
+  return get().projects.some(
+    (project) => project.status === "running" || project.status === "starting",
+  );
+}
+
+function syncToolbar(): void {
+  const state = get();
+
+  setSegmentedValue(filterControl, state.filter);
+  setSegmentedValue(viewControl, state.settings.view);
+  slidingPill(filterControl);
+  slidingPill(viewControl);
+
+  const live = anyRunning();
+  setButtonIcon(
+    powerButton,
+    live ? "stop" : "play",
+    live ? "Stop everything" : "Start every local project",
+  );
+}
+
+/**
+ * What the list looked like the last time it was rendered.
+ *
+ * The transition has to be driven by an explicit change, not inferred from the render: the
+ * metrics tick re-renders once a second, and animating the list every time would be both
+ * wrong and a permanent cost. Only a new filter or a new query is a reason to move.
+ */
+let shown = { filter: "" as string, query: "" as string };
+
 function render(): void {
   const state = get();
   const current = selected();
 
   shell.dataset.detail = current ? "open" : "closed";
 
-  renderToolbar();
+  syncToolbar();
   renderRail(rail, [...state.projects].sort((a, b) => a.order - b.order), () => showProjectForm(), showSettings);
-  renderList(list, visibleProjects(), state.usage, () => showProjectForm(), showScan);
+
+  const changed = state.filter !== shown.filter || state.query.trim() !== shown.query;
+  shown = { filter: state.filter, query: state.query.trim() };
+
+  const paint = () =>
+    renderList(list, visibleProjects(), state.usage, () => showProjectForm(), showScan);
+
+  if (changed) {
+    fluidList(list, paint);
+  } else {
+    paint();
+  }
+
   renderDetail(detail, current);
 }
 
@@ -191,6 +257,7 @@ async function main(): Promise<void> {
   installGlass();
   renderChrome();
   renderSearch();
+  buildToolbar();
   bindShortcuts();
 
   subscribe(render);

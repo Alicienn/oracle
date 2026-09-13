@@ -6,6 +6,7 @@ pub mod config;
 pub mod discovery;
 pub mod error;
 pub mod monitor;
+pub mod panel;
 pub mod remote;
 pub mod runner;
 pub mod state;
@@ -109,8 +110,8 @@ pub fn run() {
             // "state not managed". Creating the windows here, by hand, removes the race.
             app.manage(Arc::new(AppState::new(loaded, runner)));
 
+            // The panel is built on first open instead of here: see `panel`.
             let main = build_main_window(app)?;
-            build_panel_window(app)?;
 
             apply_window_effects(&handle);
             tray::build(&handle)?;
@@ -141,9 +142,10 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
-            // The panel behaves like a popover: losing focus dismisses it.
-            WindowEvent::Focused(false) if window.label() == "panel" => {
-                let _ = window.hide();
+            // The panel behaves like a popover: losing focus dismisses it, and its webview
+            // is released if it stays dismissed.
+            WindowEvent::Focused(false) if window.label() == panel::LABEL => {
+                panel::hide(window.app_handle());
             }
             _ => {}
         })
@@ -181,40 +183,20 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
         .build()
 }
 
-/// The floating tray panel.
-///
-/// Kept out of the taskbar and above everything else: it behaves like a popover, not like a
-/// second application window.
-fn build_panel_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
-    tauri::WebviewWindowBuilder::new(app, "panel", tauri::WebviewUrl::App("panel.html".into()))
-        .title("Oracle Panel")
-        .inner_size(400.0, 620.0)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .visible(false)
-        .focused(false)
-        .build()
-}
-
 /// Applies the native backdrop so the CSS glass has something real to refract.
 ///
 /// Mica is the Windows 11 material and the cheapest of the three; acrylic is the fallback for
 /// Windows 10. Both are best-effort — a machine with transparency effects disabled in
 /// accessibility settings simply gets the opaque background the CSS already defines.
+///
+/// Only the main window is handled here. The panel applies the same treatment when it is
+/// built, which no longer happens at startup.
 fn apply_window_effects(app: &tauri::AppHandle) {
     #[cfg(windows)]
     {
         use window_vibrancy::{apply_acrylic, apply_mica};
 
-        for label in ["main", "panel"] {
-            let Some(window) = app.get_webview_window(label) else {
-                continue;
-            };
-
+        if let Some(window) = app.get_webview_window("main") {
             if apply_mica(&window, None).is_err() {
                 let _ = apply_acrylic(&window, Some((22, 20, 18, 160)));
             }

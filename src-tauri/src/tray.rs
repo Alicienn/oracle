@@ -4,6 +4,7 @@
 //! because the OS offers no anchoring for this: the click event carries the icon's rectangle
 //! in physical pixels, which is enough to place the window above it and keep it on screen.
 
+use crate::panel;
 use crate::state::AppState;
 use std::sync::Arc;
 use tauri::{
@@ -59,9 +60,7 @@ fn show_main<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
-    if let Some(panel) = app.get_webview_window("panel") {
-        let _ = panel.hide();
-    }
+    panel::hide(app);
 }
 
 fn quit_app<R: Runtime>(app: &AppHandle<R>) {
@@ -83,31 +82,38 @@ pub fn toggle_panel<R: Runtime>(
     anchor: tauri::Position,
     size: tauri::Size,
 ) {
-    let Some(panel) = app.get_webview_window("panel") else {
+    if let Some(existing) = panel::existing(app) {
+        if existing.is_visible().unwrap_or(false) {
+            panel::hide(app);
+            return;
+        }
+    }
+
+    // Built here on first open, rather than at startup, so a session that never opens the
+    // panel never pays for its webview.
+    let Some(window) = panel::ensure(app) else {
         return;
     };
 
-    if panel.is_visible().unwrap_or(false) {
-        let _ = panel.hide();
-        return;
-    }
-
-    position_near(&panel, anchor, size);
-    let _ = panel.show();
-    let _ = panel.set_focus();
+    position_near(&window, anchor, size);
+    panel::mark_shown();
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 /// Opens the panel centred on the primary monitor, for the keyboard shortcut where there is
 /// no tray rectangle to anchor to.
 pub fn toggle_panel_centred<R: Runtime>(app: &AppHandle<R>) {
-    let Some(panel) = app.get_webview_window("panel") else {
+    if let Some(existing) = panel::existing(app) {
+        if existing.is_visible().unwrap_or(false) {
+            panel::hide(app);
+            return;
+        }
+    }
+
+    let Some(panel) = panel::ensure(app) else {
         return;
     };
-
-    if panel.is_visible().unwrap_or(false) {
-        let _ = panel.hide();
-        return;
-    }
 
     if let Ok(Some(monitor)) = panel.primary_monitor() {
         if let Ok(size) = panel.outer_size() {
@@ -123,6 +129,7 @@ pub fn toggle_panel_centred<R: Runtime>(app: &AppHandle<R>) {
         }
     }
 
+    panel::mark_shown();
     let _ = panel.show();
     let _ = panel.set_focus();
 }

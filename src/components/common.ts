@@ -238,15 +238,24 @@ export function toggleRow(
   return row;
 }
 
-/** A segmented control. Returns the element; selection is driven by `value`. */
+/**
+ * A segmented control. Returns the element; selection is driven by `value`.
+ *
+ * `pill` hands the pressed-state background to a single sliding element instead of painting
+ * it on each button, which is what allows the selection to travel between them. It is opt-in
+ * because it only pays off on a control that outlives its renders — one rebuilt each time
+ * has no previous position to slide from. A caller that sets it owes the control a
+ * `slidingPill` call once it is in the document.
+ */
 export function segmented<T extends string>(
   options: { value: T; label: string; iconName?: IconName; title?: string }[],
   value: T,
   onChange: (next: T) => void,
+  pill = false,
 ): HTMLElement {
   return h(
     "div",
-    { class: "filters", role: "group" },
+    { class: pill ? "filters filters--pill" : "filters", role: "group" },
     ...options.map((option) =>
       h(
         "button",
@@ -254,6 +263,9 @@ export function segmented<T extends string>(
           type: "button",
           "aria-pressed": String(option.value === value),
           title: option.title ?? option.label,
+          // Read back by `setSegmentedValue`, which is how a control that is built once
+          // keeps up with the state.
+          dataset: { value: option.value },
           onClick: () => onChange(option.value),
         },
         option.iconName && icon(icons[option.iconName]),
@@ -261,6 +273,20 @@ export function segmented<T extends string>(
       ),
     ),
   );
+}
+
+/** Moves the pressed state of a `segmented` control without rebuilding it. */
+export function setSegmentedValue(control: HTMLElement, value: string): void {
+  for (const button of control.querySelectorAll<HTMLElement>("button[data-value]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.value === value));
+  }
+}
+
+/** Swaps the glyph of a button that is built once and updated in place. */
+export function setButtonIcon(element: HTMLButtonElement, name: IconName, title: string): void {
+  element.querySelector("svg")?.replaceWith(icon(icons[name]));
+  element.title = title;
+  element.setAttribute("aria-label", title);
 }
 
 export function emptyState(

@@ -27,29 +27,31 @@ export function renderList(
   host.dataset.view = get().settings.view;
 
   if (projects.length === 0) {
-    fill(
-      host,
-      emptyState(
-        brandMark(52),
-        get().projects.length === 0 ? "No projects yet" : "Nothing matches",
-        get().projects.length === 0
-          ? "Add a project by hand, or let Oracle scan your folders and suggest what it finds."
-          : "Try a different search or filter.",
-        get().projects.length === 0
-          ? h(
-              "div",
-              { style: { display: "flex", gap: "8px" } },
-              button({ label: "Scan folders", iconName: "scan", onClick: onScan }),
-              button({
-                label: "Add a project",
-                iconName: "plus",
-                variant: "primary",
-                onClick: onAdd,
-              }),
-            )
-          : undefined,
-      ),
+    const empty = emptyState(
+      brandMark(52),
+      get().projects.length === 0 ? "No projects yet" : "Nothing matches",
+      get().projects.length === 0
+        ? "Add a project by hand, or let Oracle scan your folders and suggest what it finds."
+        : "Try a different search or filter.",
+      get().projects.length === 0
+        ? h(
+            "div",
+            { style: { display: "flex", gap: "8px" } },
+            button({ label: "Scan folders", iconName: "scan", onClick: onScan }),
+            button({
+              label: "Add a project",
+              iconName: "plus",
+              variant: "primary",
+              onClick: onAdd,
+            }),
+          )
+        : undefined,
     );
+
+    // Keyed like a card so the filter transition plays it in rather than snapping it into
+    // place while the cards it replaces are still fading out.
+    empty.dataset.key = "__empty";
+    fill(host, empty);
     return;
   }
 
@@ -84,7 +86,9 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
     {
       class: "card glass glass--live",
       type: "button",
-      dataset: { selected: String(selected) },
+      // `key` is how the filter transition recognises a card across a rebuild, so it can
+      // slide to its new row instead of being destroyed and recreated in place.
+      dataset: { selected: String(selected), key: project.id },
       onClick: () => patch({ selectedId: project.id, tab: "overview" }),
     },
     iconTile(project, 34),

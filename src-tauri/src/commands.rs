@@ -11,7 +11,7 @@ use crate::monitor::SystemUsage;
 use crate::remote::RemoteStatus;
 use crate::runner::{logs::LogLine, ProjectStatus};
 use crate::state::AppState;
-use crate::{autostart, vcs};
+use crate::{autostart, panel, vcs};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -408,16 +408,12 @@ pub fn show_main_window(app: AppHandle) {
     }
 
     // Opening the full app should dismiss the panel it was opened from.
-    if let Some(panel) = app.get_webview_window("panel") {
-        let _ = panel.hide();
-    }
+    panel::hide(&app);
 }
 
 #[tauri::command]
 pub fn hide_panel(app: AppHandle) {
-    if let Some(panel) = app.get_webview_window("panel") {
-        let _ = panel.hide();
-    }
+    panel::hide(&app);
 }
 
 #[tauri::command]
