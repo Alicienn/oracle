@@ -1,7 +1,12 @@
 //! The GPU side of a frame.
 //!
-//! Owns the surface, the glass renderer, the text layer, and the wash that sits behind
-//! everything. Knows nothing about projects — it takes a [`Frame`] and draws it.
+//! Split in two because Oracle draws into two windows — the application and the tray panel.
+//! [`Gpu`] owns everything that can be shared: the instance, the adapter, the device, the
+//! queue, and the pipelines, which depend only on the surface format. [`Target`] owns what
+//! cannot: one window's surface, its blur pyramid, and its glyph atlas.
+//!
+//! The split is not tidiness. A second device costs another 140 MB from the graphics driver
+//! on this machine — measured — which is most of what the rewrite was for.
 
 use glisten_glass::{Blur, GlassRenderer};
 
@@ -72,25 +77,24 @@ struct WashUniforms {
     accent: [f32; 4],
 }
 
-pub struct Renderer {
+/// Everything both windows share.
+pub struct Gpu {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
+    pub format: wgpu::TextureFormat,
 
     wash: wgpu::RenderPipeline,
-    wash_bind_group: wgpu::BindGroup,
-    wash_uniforms: wgpu::Buffer,
-
-    glass: GlassRenderer,
-    pub text: TextLayer,
+    wash_layout: wgpu::BindGroupLayout,
 }
 
-impl Renderer {
+impl Gpu {
+    /// Opens a device compatible with `window`, and builds the first target for it.
     pub async fn new(
         window: std::sync::Arc<winit::window::Window>,
         scale: f32,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, Target), String> {
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
 
@@ -112,17 +116,14 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("oracle"),
-                // An interface draws a handful of quads and some text. The default hint asks
-                // the driver to favour throughput, which on an integrated GPU means reserving
-                // large pools of what is, on that hardware, ordinary system memory.
                 // Measured on an AMD 860M with ORACLE_DIAG=1: the default Performance hint
                 // costs 307 MB at device creation and this costs 127 MB. An interface
                 // allocates a handful of small textures, so the large pools the default
                 // reserves buy nothing. Sizing the suballocation blocks by hand saved a
                 // further 6 MB, which is not worth the magic numbers.
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
-                // Ask for the smallest capability set that can still run the glass shader,
-                // so the driver has no reason to size its heaps for a game.
+                // The smallest capability set that still runs the glass shader, so the
+                // driver has no reason to size its heaps for a game.
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 ..Default::default()
             })
@@ -138,29 +139,12 @@ impl Renderer {
             .find(|f| !f.is_srgb())
             .unwrap_or(caps.formats[0]);
 
-        let mut config = surface
-            .get_default_config(&adapter, width, height)
-            .ok_or_else(|| "this adapter cannot draw to the window".to_string())?;
-        config.format = format;
-        config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST;
-        // Vsync. An interface has no reason to render faster than the display refreshes, and
-        // uncapped rendering on a laptop is just heat.
-        config.present_mode = wgpu::PresentMode::AutoVsync;
-        surface.configure(&device, &config);
-
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("wash"),
             source: wgpu::ShaderSource::Wgsl(WASH.into()),
         });
 
-        let wash_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("wash uniforms"),
-            size: std::mem::size_of::<WashUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let wash_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("wash layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -174,18 +158,9 @@ impl Renderer {
             }],
         });
 
-        let wash_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("wash bind group"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wash_uniforms.as_entire_binding(),
-            }],
-        });
-
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("wash pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&wash_layout)],
             immediate_size: 0,
         });
 
@@ -215,48 +190,118 @@ impl Renderer {
             cache: None,
         });
 
-        crate::app::probe("before glass");
-        let glass = GlassRenderer::new(&device, format, width, height);
-        crate::app::probe("after glass");
-        let text = TextLayer::new(&device, &queue, format, scale);
-
-        Ok(Self {
+        let gpu = Self {
+            instance,
+            adapter,
             device,
             queue,
-            surface,
-            config,
+            format,
             wash,
-            wash_bind_group,
-            wash_uniforms,
-            glass,
-            text,
-        })
+            wash_layout,
+        };
+
+        let target = gpu.build_target(surface, width, height, scale);
+        crate::app::probe("after first target");
+
+        Ok((gpu, target))
     }
 
+    /// Adds a second window to the same device.
+    pub fn attach(
+        &self,
+        window: std::sync::Arc<winit::window::Window>,
+        scale: f32,
+    ) -> Result<Target, String> {
+        let size = window.inner_size();
+        let (width, height) = (size.width.max(1), size.height.max(1));
+
+        let surface = self
+            .instance
+            .create_surface(window)
+            .map_err(|e| format!("could not create a second surface: {e}"))?;
+
+        Ok(self.build_target(surface, width, height, scale))
+    }
+
+    fn build_target(
+        &self,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> Target {
+        let mut config = surface
+            .get_default_config(&self.adapter, width, height)
+            .expect("the adapter cannot draw to this window");
+        config.format = self.format;
+        config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST;
+        // Vsync. An interface has no reason to render faster than the display refreshes,
+        // and uncapped rendering on a laptop is just heat.
+        config.present_mode = wgpu::PresentMode::AutoVsync;
+        surface.configure(&self.device, &config);
+
+        let uniforms = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wash uniforms"),
+            size: std::mem::size_of::<WashUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("wash bind group"),
+            layout: &self.wash_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            }],
+        });
+
+        Target {
+            surface,
+            config,
+            uniforms,
+            bind_group,
+            glass: GlassRenderer::new(&self.device, self.format, width, height),
+            text: TextLayer::new(&self.device, &self.queue, self.format, scale),
+        }
+    }
+}
+
+/// One window's drawing surface.
+pub struct Target {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    uniforms: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    glass: GlassRenderer,
+    pub text: TextLayer,
+}
+
+impl Target {
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
         if width == 0 || height == 0 || (width, height) == self.size() {
             return;
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
-        self.glass.resize(&self.device, width, height);
+        self.surface.configure(&gpu.device, &self.config);
+        self.glass.resize(&gpu.device, width, height);
     }
 
-    pub fn set_blur(&mut self, blur: Blur) {
-        self.glass.set_blur(&self.device, blur);
+    pub fn set_blur(&mut self, gpu: &Gpu, blur: Blur) {
+        self.glass.set_blur(&gpu.device, blur);
     }
 
     /// Draws one frame. Returns false if the surface was lost and the frame was skipped.
-    pub fn render(&mut self, frame: &Frame, palette: &Palette, time: f32) -> bool {
+    pub fn render(&mut self, gpu: &Gpu, frame: &Frame, palette: &Palette, time: f32) -> bool {
         let (width, height) = self.size();
 
-        self.queue.write_buffer(
-            &self.wash_uniforms,
+        gpu.queue.write_buffer(
+            &self.uniforms,
             0,
             bytemuck::bytes_of(&WashUniforms {
                 resolution: [width as f32, height as f32],
@@ -273,9 +318,10 @@ impl Renderer {
         );
 
         let surface_texture = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             _ => {
-                self.surface.configure(&self.device, &self.config);
+                self.surface.configure(&gpu.device, &self.config);
                 return false;
             }
         };
@@ -283,7 +329,7 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self
+        let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
 
@@ -305,13 +351,13 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.wash);
-            pass.set_bind_group(0, &self.wash_bind_group, &[]);
+            pass.set_pipeline(&gpu.wash);
+            pass.set_bind_group(0, &self.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
         // 2. Blur it, so the glass has a backdrop to read.
-        self.glass.prepare(&self.device, &self.queue, &mut encoder);
+        self.glass.prepare(&gpu.device, &gpu.queue, &mut encoder);
 
         // 3. The sharp wash to the screen, then glass, then flat fills, then text.
         encoder.copy_texture_to_texture(
@@ -325,12 +371,12 @@ impl Renderer {
         );
 
         self.glass
-            .draw(&self.device, &self.queue, &mut encoder, &view, &frame.glass);
+            .draw(&gpu.device, &gpu.queue, &mut encoder, &view, &frame.glass);
         self.glass
-            .draw(&self.device, &self.queue, &mut encoder, &view, &frame.solid);
+            .draw(&gpu.device, &gpu.queue, &mut encoder, &view, &frame.solid);
 
         self.text
-            .prepare(&self.device, &self.queue, width, height, &frame.text);
+            .prepare(&gpu.device, &gpu.queue, width, height, &frame.text);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -352,8 +398,8 @@ impl Renderer {
             self.text.render(&mut pass);
         }
 
-        self.queue.submit(Some(encoder.finish()));
-        self.queue.present(surface_texture);
+        gpu.queue.submit(Some(encoder.finish()));
+        gpu.queue.present(surface_texture);
         self.text.trim();
 
         true

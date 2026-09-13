@@ -11,6 +11,8 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{Window, WindowId};
+#[cfg(windows)]
+use winit::platform::windows::WindowAttributesExtWindows;
 
 use crate::diag;
 use crate::core::config::{self, model::*};
@@ -18,7 +20,7 @@ use crate::core::monitor::{Monitor, Sample};
 use crate::core::runner::{ProcessManager, ProjectStatus, RunnerEvent};
 use crate::ui::input::{id, Input, Key};
 use crate::ui::paint::{Frame, Rect};
-use crate::ui::renderer::Renderer;
+use crate::ui::renderer::{Gpu, Target};
 use crate::ui::text::{Align, Run};
 use crate::ui::theme::{self, gap, radius, text, Colour, GlassStyle, Palette};
 use crate::ui::widgets::{Ui, Weight};
@@ -30,7 +32,20 @@ const RAIL: f32 = 64.0;
 
 pub struct Oracle {
     window: Option<Arc<Window>>,
-    renderer: Option<Renderer>,
+    gpu: Option<Gpu>,
+    target: Option<Target>,
+
+    /// The tray panel: a second window on the same device, hidden until the tray is
+    /// clicked. Kept alive rather than created on demand, because building a surface and a
+    /// glyph atlas takes long enough to be visible.
+    panel_window: Option<Arc<Window>>,
+    panel_target: Option<Target>,
+    panel_frame: Frame,
+    panel_visible: bool,
+    /// Set by the tray thread; acted on from the event loop.
+    tray_events: std::sync::mpsc::Receiver<TrayCommand>,
+    tray_sender: std::sync::mpsc::Sender<TrayCommand>,
+    tray: Option<tray_icon::TrayIcon>,
 
     config: Config,
     palette: Palette,
@@ -121,6 +136,14 @@ impl Tab {
     const LABELS: [&'static str; 4] = ["Overview", "Logs", "Metrics", "Git"];
 }
 
+/// What the tray asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayCommand {
+    TogglePanel,
+    ShowWindow,
+    Quit,
+}
+
 /// What occupies the window. Settings and the scanner take it over entirely rather than
 /// floating: at this size a modal over a modal is worse than a screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,9 +188,19 @@ impl Default for Oracle {
             runtime.handle().clone(),
         ));
 
+        let (tray_sender, tray_events) = std::sync::mpsc::channel();
+
         Self {
             window: None,
-            renderer: None,
+            gpu: None,
+            target: None,
+            panel_window: None,
+            panel_target: None,
+            panel_frame: Frame::new(1.0),
+            panel_visible: false,
+            tray_events,
+            tray_sender,
+            tray: None,
             palette: match loaded.config.settings.theme {
                 Theme::Light => Palette::LIGHT,
                 _ => Palette::DARK,
@@ -1241,31 +1274,79 @@ impl ApplicationHandler for Oracle {
 
         self.scale = window.scale_factor() as f32;
         self.frame.set_scale(self.scale);
+        self.panel_frame.set_scale(self.scale);
         probe("after window");
 
-        match pollster::block_on(Renderer::new(window.clone(), self.scale)) {
-            Ok(mut renderer) => {
-                renderer.set_blur(Blur::Standard);
-                self.renderer = Some(renderer);
-                probe("after renderer");
-            }
+        let (gpu, mut target) = match pollster::block_on(Gpu::new(window.clone(), self.scale)) {
+            Ok(pair) => pair,
             Err(err) => {
                 eprintln!("Oracle could not start the renderer: {err}");
                 event_loop.exit();
                 return;
             }
+        };
+        target.set_blur(&gpu, Blur::Standard);
+
+        // The tray panel. Built now rather than on first use: a surface and a glyph atlas
+        // take long enough that creating them on the click would be visible as a stall.
+        let panel_attributes = Window::default_attributes()
+            .with_title("Oracle")
+            .with_inner_size(winit::dpi::LogicalSize::new(PANEL_WIDTH, PANEL_HEIGHT))
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_resizable(false)
+            // It behaves like a popover, not a second application.
+            .with_skip_taskbar(true)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_visible(false);
+
+        match event_loop.create_window(panel_attributes) {
+            Ok(panel) => {
+                let panel = Arc::new(panel);
+                match gpu.attach(panel.clone(), self.scale) {
+                    Ok(mut panel_target) => {
+                        panel_target.set_blur(&gpu, Blur::Standard);
+                        self.panel_target = Some(panel_target);
+                        self.panel_window = Some(panel);
+                    }
+                    Err(err) => eprintln!("Oracle could not prepare the tray panel: {err}"),
+                }
+            }
+            Err(err) => eprintln!("Oracle could not open the tray panel: {err}"),
         }
 
+        self.gpu = Some(gpu);
+        self.target = Some(target);
+        probe("after renderer");
+
+        self.build_tray();
         self.window = Some(window);
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // The panel is a separate window with its own frame and its own surface, so its
+        // events must not be mistaken for the application's.
+        if self.panel_window.as_ref().is_some_and(|w| w.id() == id) {
+            self.panel_event(event);
+            return;
+        }
+
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            // Closing the window sends Oracle to the tray when the setting says so;
+            // quitting is explicit, from the tray menu or the panel.
+            WindowEvent::CloseRequested => {
+                if self.config.settings.minimise_to_tray {
+                    if let Some(window) = self.window.as_ref() {
+                        window.set_visible(false);
+                    }
+                } else {
+                    self.shutdown(event_loop);
+                }
+            }
 
             WindowEvent::Resized(size) => {
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.resize(size.width, size.height);
+                if let (Some(gpu), Some(target)) = (self.gpu.as_ref(), self.target.as_mut()) {
+                    target.resize(gpu, size.width, size.height);
                 }
                 self.needs_frame = true;
             }
@@ -1273,9 +1354,13 @@ impl ApplicationHandler for Oracle {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale = scale_factor as f32;
                 self.frame.set_scale(self.scale);
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.text.set_scale(self.scale);
+                if let Some(target) = self.target.as_mut() {
+                    target.text.set_scale(self.scale);
                 }
+                if let Some(panel) = self.panel_target.as_mut() {
+                    panel.text.set_scale(self.scale);
+                }
+                self.panel_frame.set_scale(self.scale);
                 self.needs_frame = true;
             }
 
@@ -1353,19 +1438,19 @@ impl ApplicationHandler for Oracle {
                 let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
                 self.last_frame = now;
 
-                let Some(renderer) = self.renderer.as_mut() else {
+                let Some(target) = self.target.as_mut() else {
                     return;
                 };
 
-                let (pw, ph) = renderer.size();
+                let (pw, ph) = target.size();
                 let (width, height) = (pw as f32 / self.scale, ph as f32 / self.scale);
 
                 self.build(width, height, dt);
 
                 let elapsed = self.started.elapsed().as_secs_f32();
                 let palette = self.palette;
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.render(&self.frame, &palette, elapsed);
+                if let (Some(gpu), Some(target)) = (self.gpu.as_ref(), self.target.as_mut()) {
+                    target.render(gpu, &self.frame, &palette, elapsed);
 
                     // Strings the layout pass asked about. Measured here because this is the
                     // only place the text engine is reachable, and cached because shaping is
@@ -1374,7 +1459,7 @@ impl ApplicationHandler for Oracle {
                         // Shaped at the logical size, so the result is already in the units
                         // the layout works in. Dividing by the scale here would shrink the
                         // caret's travel by a third on a 150% display.
-                        let width = renderer.text.measure(&value, text::BASE, 400, false);
+                        let width = target.text.measure(&value, text::BASE, 400, false);
                         self.measured.insert(value, width);
                     }
                     if self.measured.len() > 256 {
@@ -1389,12 +1474,14 @@ impl ApplicationHandler for Oracle {
                 self.input.end_frame();
 
                 if self.closing {
-                    // Children outlive their parent on Windows unless they are killed
-                    // explicitly, so nothing Oracle started is left running with no way to
-                    // reach it.
-                    let runner = self.runner.clone();
-                    self.runtime.block_on(async move { runner.stop_all().await });
-                    event_loop.exit();
+                    self.closing = false;
+                    if self.config.settings.minimise_to_tray {
+                        if let Some(window) = self.window.as_ref() {
+                            window.set_visible(false);
+                        }
+                    } else {
+                        self.shutdown(event_loop);
+                    }
                 }
             }
 
@@ -1403,12 +1490,20 @@ impl ApplicationHandler for Oracle {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.poll_tray(event_loop);
+
         if let Some(window) = self.window.as_ref() {
             if self.needs_frame {
                 window.request_redraw();
                 event_loop.set_control_flow(ControlFlow::Poll);
             } else {
                 event_loop.set_control_flow(ControlFlow::Wait);
+            }
+        }
+
+        if self.panel_visible {
+            if let Some(panel) = self.panel_window.as_ref() {
+                panel.request_redraw();
             }
         }
     }
@@ -1826,12 +1921,18 @@ impl Oracle {
             };
         }
         if glass_changed {
-            if let Some(renderer) = self.renderer.as_mut() {
-                renderer.set_blur(match self.config.settings.glass {
-                    GlassLevel::Full => Blur::Standard,
-                    GlassLevel::Reduced => Blur::Light,
-                    GlassLevel::Opaque => Blur::None,
-                });
+            let blur = match self.config.settings.glass {
+                GlassLevel::Full => Blur::Standard,
+                GlassLevel::Reduced => Blur::Light,
+                GlassLevel::Opaque => Blur::None,
+            };
+            if let Some(gpu) = self.gpu.as_ref() {
+                if let Some(target) = self.target.as_mut() {
+                    target.set_blur(gpu, blur);
+                }
+                if let Some(panel) = self.panel_target.as_mut() {
+                    panel.set_blur(gpu, blur);
+                }
             }
         }
         if autostart_changed {
@@ -2542,5 +2643,449 @@ impl Oracle {
         self.draft = None;
         self.screen = Screen::Projects;
         self.input.blur();
+    }
+}
+
+/// Size of the tray panel, in logical pixels.
+const PANEL_WIDTH: f64 = 380.0;
+const PANEL_HEIGHT: f64 = 560.0;
+
+impl Oracle {
+    /// Builds the tray icon and wires its events into the event loop's channel.
+    ///
+    /// `tray-icon` delivers events through global handlers on its own thread, so both are
+    /// forwarded into a channel and acted on from the event loop where the windows live.
+    fn build_tray(&mut self) {
+        use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+        use tray_icon::{TrayIconBuilder, TrayIconEvent};
+
+        let icon = match tray_image() {
+            Some(icon) => icon,
+            None => {
+                eprintln!("Oracle could not build its tray icon");
+                return;
+            }
+        };
+
+        let menu = Menu::new();
+        let open = MenuItem::new("Open Oracle", true, None);
+        let quit = MenuItem::new("Quit", true, None);
+        let open_id = open.id().clone();
+        let quit_id = quit.id().clone();
+
+        if menu.append(&open).is_err() || menu.append(&quit).is_err() {
+            eprintln!("Oracle could not build its tray menu");
+            return;
+        }
+
+        let sender = self.tray_sender.clone();
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let command = if event.id == open_id {
+                TrayCommand::ShowWindow
+            } else if event.id == quit_id {
+                TrayCommand::Quit
+            } else {
+                return;
+            };
+            let _ = sender.send(command);
+        }));
+
+        let sender = self.tray_sender.clone();
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            // Left click toggles the panel. The menu has the right button, which is why it
+            // is not shown on the left one.
+            if let TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                button_state: tray_icon::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let _ = sender.send(TrayCommand::TogglePanel);
+            }
+        }));
+
+        match TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_icon(icon)
+            .with_tooltip("Oracle")
+            .with_menu_on_left_click(false)
+            .build()
+        {
+            Ok(tray) => self.tray = Some(tray),
+            Err(err) => eprintln!("Oracle could not create its tray icon: {err}"),
+        }
+    }
+
+    /// Acts on whatever the tray asked for since the last frame.
+    fn poll_tray(&mut self, event_loop: &ActiveEventLoop) {
+        while let Ok(command) = self.tray_events.try_recv() {
+            match command {
+                TrayCommand::TogglePanel => self.toggle_panel(),
+                TrayCommand::ShowWindow => {
+                    self.hide_panel();
+                    if let Some(window) = self.window.as_ref() {
+                        window.set_visible(true);
+                        window.set_minimized(false);
+                        window.focus_window();
+                    }
+                }
+                TrayCommand::Quit => {
+                    self.shutdown(event_loop);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn toggle_panel(&mut self) {
+        if self.panel_visible {
+            self.hide_panel();
+        } else {
+            self.show_panel();
+        }
+    }
+
+    /// Places the panel above the tray and shows it.
+    ///
+    /// The tray sits at the bottom right on a default Windows setup, and the work area stops
+    /// where the taskbar begins — which is what anchors the panel without having to ask the
+    /// shell where the tray icon actually is.
+    fn show_panel(&mut self) {
+        let Some(panel) = self.panel_window.as_ref() else {
+            return;
+        };
+
+        if let Some(monitor) = panel.current_monitor().or_else(|| panel.primary_monitor()) {
+            let scale = monitor.scale_factor();
+            let area = monitor.size();
+            let origin = monitor.position();
+
+            let width = PANEL_WIDTH * scale;
+            let height = PANEL_HEIGHT * scale;
+            let margin = 12.0 * scale;
+            // Room for the taskbar. Monitor size counts it as usable; it is not.
+            let taskbar = 56.0 * scale;
+
+            let x = origin.x as f64 + area.width as f64 - width - margin;
+            let y = origin.y as f64 + area.height as f64 - height - taskbar - margin;
+
+            panel.set_outer_position(winit::dpi::PhysicalPosition::new(x.max(0.0), y.max(0.0)));
+        }
+
+        panel.set_visible(true);
+        panel.focus_window();
+        self.panel_visible = true;
+        self.needs_frame = true;
+    }
+
+    fn hide_panel(&mut self) {
+        if let Some(panel) = self.panel_window.as_ref() {
+            panel.set_visible(false);
+        }
+        self.panel_visible = false;
+    }
+
+    /// Stops every child and exits.
+    fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
+        let runner = self.runner.clone();
+        self.runtime.block_on(async move { runner.stop_all().await });
+        event_loop.exit();
+    }
+
+    /// Lays out the tray panel.
+    ///
+    /// A real interface, not a menu: the same glass, the same controls, the same status the
+    /// application shows — just denser, and only what can be acted on without reading.
+    fn build_panel(&mut self, width: f32, height: f32, dt: f32) {
+        self.panel_frame.clear();
+        let palette = self.palette;
+
+        // Header.
+        let cx = gap::MD + 8.0;
+        let cy = 26.0;
+        self.panel_frame.dot([cx - 4.0, cy - 4.0], 6.0, palette.accent);
+        self.panel_frame.dot([cx + 5.0, cy - 3.5], 4.5, palette.accent);
+        self.panel_frame.dot([cx, cy + 3.5], 5.0, palette.accent);
+
+        self.panel_frame.text(
+            Run::new("Oracle", gap::MD + 22.0, cy - 8.0, text::BASE, palette.ink).weight(640),
+        );
+
+        let running = self
+            .statuses
+            .values()
+            .filter(|s| matches!(s, ProjectStatus::Running))
+            .count();
+        self.panel_frame.text(
+            Run::new(
+                if running == 0 {
+                    "Nothing running".to_string()
+                } else {
+                    format!("{running} running")
+                },
+                width - gap::MD,
+                cy - 6.0,
+                text::XS,
+                palette.muted,
+            )
+            .align(Align::Right),
+        );
+
+        self.panel_frame
+            .rule(0.0, 48.0, width, false, palette.line);
+
+        // Rows.
+        let projects: Vec<Project> = self.config.projects.clone();
+        let mut y = 58.0;
+
+        if projects.is_empty() {
+            self.panel_frame.text(
+                Run::new(
+                    "No projects yet. Open Oracle to add one.",
+                    width * 0.5,
+                    height * 0.4,
+                    text::SM,
+                    palette.muted,
+                )
+                .align(Align::Centre)
+                .width(width - gap::XL),
+            );
+        }
+
+        let mut toggled = None;
+        for project in &projects {
+            if y > height - 62.0 {
+                break;
+            }
+
+            let status = self.status_of(&project.id);
+            let live = matches!(status, ProjectStatus::Running | ProjectStatus::Starting);
+            let accent = self.accent_of(project);
+            let rect: Rect = [gap::SM, y, width - gap::SM * 2.0, 44.0];
+
+            let response = self
+                .input
+                .interact(id("panelrow", &project.id), rect, dt);
+            if response.hover > 0.01 {
+                self.panel_frame.fill(
+                    rect,
+                    theme::fade(palette.line, response.hover * 0.8),
+                    radius::SM,
+                );
+            }
+
+            let tile: Rect = [rect[0] + gap::SM, y + 9.0, 26.0, 26.0];
+            self.panel_frame.fill(tile, accent, radius::XS);
+            self.panel_frame.centred(
+                initials(&project.name),
+                tile[0] + 13.0,
+                tile[1] + 5.0,
+                text::XS,
+                [1.0, 1.0, 1.0, 1.0],
+                700,
+            );
+
+            let tx = tile[0] + 34.0;
+            self.panel_frame.text(
+                Run::new(&project.name, tx, y + 7.0, text::SM, palette.ink)
+                    .weight(570)
+                    .width(width - tx - 70.0),
+            );
+
+            let meta = match (live, self.usage.get(&project.id)) {
+                (true, Some(sample)) => {
+                    format!("{} · {}", percent(sample.cpu), bytes(sample.memory))
+                }
+                _ => status_label(status).to_string(),
+            };
+            self.panel_frame
+                .label(meta, tx, y + 24.0, text::XS, palette.muted);
+
+            self.panel_frame.dot(
+                [width - 54.0, y + 22.0],
+                7.0,
+                status_colour(status, &palette),
+            );
+
+            if project.local.is_some() {
+                let play: Rect = [width - 42.0, y + 9.0, 26.0, 26.0];
+                let play_response = self
+                    .input
+                    .interact(id("panelplay", &project.id), play, dt);
+                let lit = play_response.hover > 0.01 || live;
+
+                self.panel_frame.fill(
+                    play,
+                    if lit {
+                        palette.accent
+                    } else {
+                        theme::fade(palette.accent, 0.18)
+                    },
+                    radius::XS,
+                );
+                self.panel_frame.centred(
+                    if live { "\u{25A0}" } else { "\u{25B6}" },
+                    play[0] + 13.0,
+                    play[1] + 5.0,
+                    text::XS,
+                    if lit { [1.0, 1.0, 1.0, 1.0] } else { palette.accent },
+                    500,
+                );
+
+                if play_response.clicked {
+                    toggled = Some(project.id.clone());
+                }
+            }
+
+            y += 50.0;
+        }
+
+        if let Some(project_id) = toggled {
+            self.toggle(&project_id);
+        }
+
+        // Footer.
+        let footer = height - 46.0;
+        self.panel_frame
+            .rule(0.0, footer - gap::SM, width, false, palette.line);
+
+        let (open, quit) = {
+            let palette = self.palette;
+            let mut ui = Ui {
+                frame: &mut self.panel_frame,
+                input: &mut self.input,
+                palette,
+                dt,
+            };
+            let open = ui.button(
+                "panel-open",
+                [gap::MD, footer, 120.0, 30.0],
+                "Open Oracle",
+                Weight::Primary,
+            );
+            let quit = ui.icon_button(
+                "panel-quit",
+                [width - gap::MD - 30.0, footer, 30.0, 30.0],
+                "\u{23FB}",
+                false,
+            );
+            (open, quit)
+        };
+
+        if open {
+            let _ = self.tray_sender.send(TrayCommand::ShowWindow);
+        }
+        if quit {
+            let _ = self.tray_sender.send(TrayCommand::Quit);
+        }
+    }
+}
+
+/// The tray icon, built from the same three circles as the brand mark.
+///
+/// Drawn rather than loaded: a PNG beside the executable is one more thing to lose, and at
+/// 32 pixels the mark is three discs and a hole.
+fn tray_image() -> Option<tray_icon::Icon> {
+    const SIZE: u32 = 32;
+    let accent = [193u8, 95, 60];
+
+    let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
+
+    // Centre, radius, and whether the disc is solid or a ring.
+    let discs: [(f32, f32, f32, bool); 4] = [
+        (16.0, 17.5, 6.6, true),
+        (8.5, 8.5, 4.0, false),
+        (16.2, 27.0, 3.4, false),
+        (25.5, 9.0, 3.2, false),
+    ];
+
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let mut coverage = 0.0f32;
+
+            for (cx, cy, radius, hollow) in discs {
+                let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+                // One pixel of feather, so the mark is not jagged at this size.
+                let inside = (1.0 - (distance - radius + 0.5)).clamp(0.0, 1.0);
+                let mut value = inside;
+
+                if hollow {
+                    // The hole through the middle disc.
+                    let hole = ((distance - 2.5) + 0.5).clamp(0.0, 1.0);
+                    value = inside.min(hole);
+                }
+
+                coverage = coverage.max(value);
+            }
+
+            let index = ((y * SIZE + x) * 4) as usize;
+            pixels[index] = accent[0];
+            pixels[index + 1] = accent[1];
+            pixels[index + 2] = accent[2];
+            pixels[index + 3] = (coverage * 255.0) as u8;
+        }
+    }
+
+    tray_icon::Icon::from_rgba(pixels, SIZE, SIZE).ok()
+}
+
+impl Oracle {
+    /// Events belonging to the tray panel.
+    fn panel_event(&mut self, event: WindowEvent) {
+        match event {
+            // The panel behaves like a popover: losing focus dismisses it.
+            WindowEvent::Focused(false) => self.hide_panel(),
+
+            WindowEvent::CursorMoved { position, .. } => {
+                self.input.pointer = [
+                    position.x as f32 / self.scale,
+                    position.y as f32 / self.scale,
+                ];
+                self.input.pointer_in_window = true;
+            }
+
+            WindowEvent::CursorLeft { .. } => self.input.pointer_in_window = false,
+
+            WindowEvent::MouseInput { state, button, .. } if button == MouseButton::Left => {
+                match state {
+                    ElementState::Pressed => {
+                        self.input.down = true;
+                        self.input.just_pressed = true;
+                    }
+                    ElementState::Released => {
+                        self.input.down = false;
+                        self.input.just_released = true;
+                    }
+                }
+            }
+
+            WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+                let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
+                self.last_frame = now;
+
+                self.poll();
+
+                let Some(target) = self.panel_target.as_ref() else {
+                    return;
+                };
+                let (pw, ph) = target.size();
+                let (width, height) = (pw as f32 / self.scale, ph as f32 / self.scale);
+
+                self.build_panel(width, height, dt);
+
+                let elapsed = self.started.elapsed().as_secs_f32();
+                let palette = self.palette;
+                if let (Some(gpu), Some(target)) = (self.gpu.as_ref(), self.panel_target.as_mut())
+                {
+                    target.render(gpu, &self.panel_frame, &palette, elapsed);
+                }
+
+                self.input.end_frame();
+            }
+
+            _ => {}
+        }
     }
 }

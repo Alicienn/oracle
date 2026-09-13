@@ -34,6 +34,7 @@ sysinfo = "0.38"
 dirs = "7"
 chrono = "0.4"
 parking_lot = "0.12"
+tray-icon = "0.24.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
