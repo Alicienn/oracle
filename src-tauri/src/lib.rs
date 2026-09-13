@@ -5,6 +5,7 @@ pub mod commands;
 pub mod config;
 pub mod discovery;
 pub mod error;
+pub mod favicon;
 pub mod monitor;
 pub mod panel;
 pub mod remote;
@@ -50,6 +51,9 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // Needed to relaunch after an update installs.
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![autostart::HIDDEN_FLAG]),
@@ -124,6 +128,7 @@ pub fn run() {
             tasks::spawn_metrics_loop(handle.clone());
             tasks::spawn_health_loop(handle.clone());
             tasks::spawn_adoption_sweep(handle.clone());
+            tasks::spawn_favicon_sweep(handle.clone());
             tasks::spawn_project_autostart(handle);
 
             Ok(())

@@ -10,6 +10,7 @@ use crate::remote::RemoteStatus;
 use crate::runner::ProcessManager;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct AppState {
@@ -18,6 +19,8 @@ pub struct AppState {
     pub monitor: Mutex<Monitor>,
     /// Last known status per remote project.
     pub remote: RwLock<HashMap<String, RemoteStatus>>,
+    /// Cached icon file per project, for the ones that serve one.
+    pub favicons: RwLock<HashMap<String, PathBuf>>,
     pub http: reqwest::Client,
     /// Startup notices worth showing once, such as a recovered config file.
     pub warnings: RwLock<Vec<String>>,
@@ -39,6 +42,7 @@ impl AppState {
             runner,
             monitor: Mutex::new(Monitor::new()),
             remote: RwLock::new(HashMap::new()),
+            favicons: RwLock::new(HashMap::new()),
             http: crate::remote::client(),
             warnings: RwLock::new(warnings),
         }
@@ -61,6 +65,11 @@ impl AppState {
             .into_iter()
             .map(|info| (info.project_id, info.pid))
             .collect()
+    }
+
+    /// The icon downloaded for a project, if one was found.
+    pub fn favicon(&self, project_id: &str) -> Option<PathBuf> {
+        self.favicons.read().get(project_id).cloned()
     }
 
     pub fn take_warnings(&self) -> Vec<String> {

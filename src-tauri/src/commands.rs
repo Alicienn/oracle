@@ -35,6 +35,8 @@ pub struct ProjectView {
     pub pid: Option<u32>,
     /// The project's own accent, or the one derived from its kind.
     pub resolved_accent: String,
+    /// The project's own icon, or the favicon of whatever it serves.
+    pub resolved_icon: IconSource,
     pub resolved_url: Option<String>,
     pub kind_label: String,
 }
@@ -51,6 +53,23 @@ pub struct Snapshot {
     pub version: String,
 }
 
+/// The icon to draw.
+///
+/// An explicit choice always wins; `Auto` falls back to whatever favicon was downloaded for
+/// the project, and to its initials when there is none. The file is reported rather than the
+/// remote URL so the webview loads it locally: instantly, offline, and with no request per
+/// render.
+fn resolved_icon(state: &AppState, project: &Project) -> IconSource {
+    if !matches!(project.icon, IconSource::Auto) {
+        return project.icon.clone();
+    }
+
+    match state.favicon(&project.id) {
+        Some(path) => IconSource::File(path),
+        None => IconSource::Auto,
+    }
+}
+
 fn view(state: &AppState, project: &Project) -> ProjectView {
     ProjectView {
         status: state.runner.status(&project.id),
@@ -65,6 +84,7 @@ fn view(state: &AppState, project: &Project) -> ProjectView {
             .accent
             .clone()
             .unwrap_or_else(|| project.kind.accent().to_string()),
+        resolved_icon: resolved_icon(state, project),
         resolved_url: project.open_url(),
         kind_label: project.kind.label().to_string(),
         project: project.clone(),
@@ -169,7 +189,7 @@ pub async fn restart_project(state: St<'_>, project_id: String, port: Option<u16
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn add_project(state: St, mut project: Project) -> Result<ProjectView> {
+pub fn add_project(app: AppHandle, state: St, mut project: Project) -> Result<ProjectView> {
     if project.id.is_empty() {
         project.id = uuid::Uuid::new_v4().to_string();
     }
@@ -181,11 +201,12 @@ pub fn add_project(state: St, mut project: Project) -> Result<ProjectView> {
     }
 
     state.persist()?;
+    request_favicon(&app, &project);
     Ok(view(&state, &project))
 }
 
 #[tauri::command]
-pub fn update_project(state: St, project: Project) -> Result<ProjectView> {
+pub fn update_project(app: AppHandle, state: St, project: Project) -> Result<ProjectView> {
     {
         let mut config = state.config.write();
         let existing = config
@@ -199,7 +220,22 @@ pub fn update_project(state: St, project: Project) -> Result<ProjectView> {
     }
 
     state.persist()?;
+    request_favicon(&app, &project);
     Ok(view(&state, &project))
+}
+
+/// Asks for the icon of a project that has a remote URL and no icon of its own.
+///
+/// Called after a write rather than on read: fetching is slow and networked, and the view
+/// has to answer immediately with whatever is already known.
+fn request_favicon(app: &AppHandle, project: &Project) {
+    if !matches!(project.icon, IconSource::Auto) {
+        return;
+    }
+
+    if let Some(remote) = &project.remote {
+        crate::tasks::spawn_favicon_for(app.clone(), project.id.clone(), remote.url.clone());
+    }
 }
 
 #[tauri::command]

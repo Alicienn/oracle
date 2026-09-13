@@ -102,6 +102,7 @@ const initial: State = {
     panelShortcut: "CmdOrCtrl+Shift+Space",
     minimiseToTray: true,
     view: "list",
+    checkUpdates: true,
   },
   system: { cpu: 0, memoryUsed: 0, memoryTotal: 0 },
   usage: {},
@@ -317,6 +318,10 @@ export async function connect(): Promise<void> {
       }),
     });
   });
+
+  // Icons arrive after startup, from hosts that may be slow; re-reading the list is what
+  // swaps initials for the real thing.
+  await events.icons(() => void refreshProjects());
 
   await events.status((projectId: string, status: ProjectStatus) => {
     patchProject(projectId, { status });

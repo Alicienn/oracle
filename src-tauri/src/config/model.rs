@@ -312,6 +312,17 @@ pub struct Settings {
     pub panel_shortcut: String,
     pub minimise_to_tray: bool,
     pub view: ViewMode,
+
+    /// Look for a new release at launch.
+    ///
+    /// On by default — an app distributed as a downloaded installer has no other way to stay
+    /// current — but a check is a request to a third party, so it stays the user's to refuse.
+    #[serde(default = "yes")]
+    pub check_updates: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn default_shortcut() -> String {
@@ -331,6 +342,7 @@ impl Default for Settings {
             panel_shortcut: default_shortcut(),
             minimise_to_tray: true,
             view: ViewMode::default(),
+            check_updates: true,
         }
     }
 }

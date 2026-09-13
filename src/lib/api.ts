@@ -79,6 +79,8 @@ export type RemoteStatus =
 
 /** A project plus everything the UI needs, resolved by the backend. */
 export interface ProjectView extends Project {
+  /** `icon` with `auto` resolved — a favicon for anything that serves HTTP. */
+  resolvedIcon: IconSource;
   status: ProjectStatus;
   remoteStatus: RemoteStatus;
   pid?: number | null;
@@ -102,6 +104,7 @@ export interface Settings {
   panelShortcut: string;
   minimiseToTray: boolean;
   view: ViewMode;
+  checkUpdates: boolean;
 }
 
 export interface SystemUsage {
@@ -300,6 +303,10 @@ export const events = {
     listen<{ projectId: string; status: ProjectStatus }>("status:change", (event) =>
       handler(event.payload.projectId, event.payload.status),
     ),
+
+  /** Fired once, after the backend has downloaded the icons remote projects serve. */
+  icons: (handler: () => void): Promise<UnlistenFn> =>
+    listen("icons:resolved", () => handler()),
 };
 
 /** A blank project, ready for the create form. */

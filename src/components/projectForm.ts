@@ -152,10 +152,14 @@ export function showProjectForm(existing?: Project): void {
     value: draft.accent ?? "#c15f3c",
   }) as HTMLInputElement;
 
+  // What "automatic" actually resolves to is decided by the backend: the favicon of
+  // whatever the project serves, or its initials when there is nothing to fetch.
+  const AUTOMATIC = "Automatic — the site's favicon when it serves one, otherwise initials";
+
   const iconLabel = h(
     "span",
     { class: "field__hint" },
-    icon.type === "file" ? "Custom image selected" : "Using the project initials",
+    icon.type === "file" ? "Custom image selected" : AUTOMATIC,
   );
 
   const pickIcon = button({
@@ -183,7 +187,7 @@ export function showProjectForm(existing?: Project): void {
     variant: "ghost",
     onClick: () => {
       icon = { type: "auto" };
-      iconLabel.textContent = "Using the project initials";
+      iconLabel.textContent = AUTOMATIC;
     },
   });
 

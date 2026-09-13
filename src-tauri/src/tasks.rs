@@ -6,6 +6,8 @@
 //!
 //! Each loop body is wrapped so a panic inside it kills the tick, not the loop.
 
+use crate::config::model::IconSource;
+use crate::favicon;
 use crate::monitor::{SystemUsage, Usage};
 use crate::remote::{self, RemoteReport};
 use crate::state::AppState;
@@ -16,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub const METRICS_EVENT: &str = "metrics:tick";
 pub const REMOTE_EVENT: &str = "remote:tick";
+pub const ICONS_EVENT: &str = "icons:resolved";
 
 const SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 
@@ -201,4 +204,71 @@ pub fn spawn_project_autostart(app: AppHandle) {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
     });
+}
+
+/// Downloads the icon each remote project serves, once, in the background.
+///
+/// Runs off the startup path on purpose: it is several HTTP requests to hosts that may be
+/// slow or gone, and nothing in the UI is waiting for it. Projects keep their initials until
+/// an icon arrives, and the one event at the end tells the frontend to re-read the list.
+pub fn spawn_favicon_sweep(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let Some(state) = app.try_state::<Arc<AppState>>() else {
+            return;
+        };
+
+        let targets: Vec<(String, String)> = {
+            let config = state.config.read();
+            config
+                .projects
+                .iter()
+                // Only where Oracle would otherwise draw initials: a project with a chosen
+                // icon must not have it replaced by whatever its site serves.
+                .filter(|project| matches!(project.icon, IconSource::Auto))
+                .filter_map(|project| {
+                    project
+                        .remote
+                        .as_ref()
+                        .map(|remote| (project.id.clone(), remote.url.clone()))
+                })
+                .collect()
+        };
+
+        if targets.is_empty() {
+            return;
+        }
+
+        let mut found = false;
+        for (project_id, url) in targets {
+            found |= store_favicon(&state, &project_id, &url).await;
+        }
+
+        if found {
+            let _ = app.emit(ICONS_EVENT, ());
+        }
+    });
+}
+
+/// Resolves the icon for one project, for a project added or edited after startup.
+pub fn spawn_favicon_for(app: AppHandle, project_id: String, url: String) {
+    tauri::async_runtime::spawn(async move {
+        let Some(state) = app.try_state::<Arc<AppState>>() else {
+            return;
+        };
+
+        if store_favicon(&state, &project_id, &url).await {
+            let _ = app.emit(ICONS_EVENT, ());
+        }
+    });
+}
+
+/// Downloads and records one project's icon. True when there is something new to show.
+async fn store_favicon(state: &Arc<AppState>, project_id: &str, url: &str) -> bool {
+    match favicon::resolve(url).await {
+        Some(path) => {
+            state.favicons.write().insert(project_id.to_string(), path);
+            true
+        }
+        None => false,
+    }
 }

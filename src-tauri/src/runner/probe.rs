@@ -210,8 +210,11 @@ Active Connections
         let port = listener.local_addr().unwrap().port();
 
         assert!(port_is_taken(port));
-        drop(listener);
-        assert!(!port_is_taken(port));
+
+        // Deliberately not asserting that the port reads free again once dropped: it is an
+        // ephemeral port, and any test running alongside this one may legitimately claim it
+        // the moment it is released. `a_suggested_port_can_actually_be_bound` covers the
+        // free case against a port nobody else is competing for.
     }
 
     #[test]
