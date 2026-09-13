@@ -103,6 +103,7 @@ const initial: State = {
     minimiseToTray: true,
     view: "list",
     checkUpdates: true,
+    lastSeenVersion: "",
   },
   system: { cpu: 0, memoryUsed: 0, memoryTotal: 0 },
   usage: {},

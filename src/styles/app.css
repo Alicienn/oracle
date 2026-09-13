@@ -104,8 +104,10 @@ textarea {
  * Inside the title bar, which is a drag region: a control here has to opt out of it, or
  * pressing the chip moves the window instead of clicking it.
  */
-.titlebar__update {
+.titlebar__chips {
   display: flex;
+  align-items: center;
+  gap: var(--gap-2);
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
@@ -158,6 +160,13 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* News rather than an offer: quieter, since nothing is waiting on the user. */
+.chip[data-state="news"] {
+  background: var(--glass-tint-faint);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: var(--ink-soft);
+}
+
 /* Ready to install: the tick has landed, so the chip speaks in the success colour. */
 .chip[data-state="ready"] {
   background: color-mix(in srgb, var(--ok) 14%, transparent);
@@ -169,6 +178,57 @@ textarea {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 28%, transparent);
   color: var(--danger);
+}
+
+/*
+ * A pill carrying its own dismissal.
+ *
+ * Two controls in one shape: the thing it offers, and a cross for someone who has read
+ * enough. Written as a container so `.chip` styles the pill whether it is a button itself
+ * or holds buttons.
+ */
+.chip--closable {
+  padding: 0;
+  gap: 0;
+}
+
+.chip__main,
+.chip__close {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chip__main {
+  padding: 0 8px 0 10px;
+  border-radius: var(--r-full) 0 0 var(--r-full);
+}
+
+.chip__close {
+  padding: 0 9px 0 6px;
+  border-radius: 0 var(--r-full) var(--r-full) 0;
+  opacity: 0.7;
+}
+
+.chip__main:hover,
+.chip__close:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.chip__close:hover {
+  opacity: 1;
+}
+
+.chip__close svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
 }
 
 @keyframes chip-in {
@@ -468,6 +528,11 @@ textarea {
  */
 .list[data-empty="true"] {
   display: grid;
+  /* The column template has to be reset, not just overridden by `place-*`. Left as
+     `repeat(auto-fill, minmax(228px, 1fr))` from the grid view, the tracks still fill the
+     width and the single child lands in the first one — centred inside a 228px column at
+     the left edge, which is exactly what it looked like. */
+  grid-template-columns: 1fr;
   place-content: center;
   place-items: center;
 }
@@ -499,6 +564,16 @@ textarea {
     var(--shadow-near),
     var(--shadow-far),
     inset 0 0 0 1px var(--accent);
+}
+
+/*
+ * The card being dragged.
+ *
+ * Faded rather than hidden: it is still the thing the cursor is carrying, and removing it
+ * would collapse the row underneath and move the target the user is aiming at.
+ */
+.card[data-dragging="true"] {
+  opacity: 0.4;
 }
 
 /*
@@ -1213,6 +1288,12 @@ textarea.input:focus {
  * release description, and turning arbitrary text into markup is both a parser and a
  * decision about what is safe to render.
  */
+/* In the changelog dialog the notes are the whole point, so they get the room. */
+.release-notes--tall {
+  max-height: min(52vh, 420px);
+  margin-top: 0;
+}
+
 .release-notes {
   margin-top: var(--gap-4);
   max-height: 180px;

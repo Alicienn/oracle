@@ -38,6 +38,7 @@ import { showSettings } from "./components/settings";
 import { showScan } from "./components/scan";
 import { isModalOpen } from "./components/modal";
 import { mountUpdateChip } from "./components/updateChip";
+import { offerChangelog } from "./components/changelogChip";
 import { findUpdate } from "./lib/updates";
 
 const appWindow = getCurrentWindow();
@@ -275,6 +276,9 @@ async function main(): Promise<void> {
   // an empty page.
   await probePerformance(get().settings.glass);
 
+  // Both can be true at once — updated a moment ago, and already behind again — and the
+  // title bar has room for both chips.
+  void offerChangelog();
   void offerUpdate();
 }
 

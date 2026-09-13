@@ -47,6 +47,12 @@ npm run release                              # or: npm run release -- --notes "W
 It builds, signs, writes the manifest the updater reads, tags the commit, and publishes the
 release with `gh`. Add `--dry-run` to do everything except tag and publish.
 
+It refuses to publish a version with no `## <version>` section in
+[CHANGELOG.md](CHANGELOG.md), and that section becomes the release notes — written once, so
+the notes on GitHub and the ones Oracle shows after updating cannot drift apart. The app
+carries the changelog compiled in, and offers the entry for the version it is running the
+first time it starts on a new one.
+
 Signing is not optional — the updater refuses any package it cannot verify against the public
 key in `src-tauri/tauri.conf.json`, which is what makes an application that downloads and runs
 an installer on its own acceptable. The keypair was generated with

@@ -319,6 +319,14 @@ pub struct Settings {
     /// current — but a check is a request to a third party, so it stays the user's to refuse.
     #[serde(default = "yes")]
     pub check_updates: bool,
+
+    /// The version whose changelog the user has already seen.
+    ///
+    /// Compared against the running version to decide whether an update just happened.
+    /// Empty on a first run, which is how a fresh install avoids being shown release notes
+    /// for something it never upgraded from.
+    #[serde(default)]
+    pub last_seen_version: String,
 }
 
 fn yes() -> bool {
@@ -343,6 +351,7 @@ impl Default for Settings {
             minimise_to_tray: true,
             view: ViewMode::default(),
             check_updates: true,
+            last_seen_version: String::new(),
         }
     }
 }

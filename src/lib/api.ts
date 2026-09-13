@@ -105,6 +105,7 @@ export interface Settings {
   minimiseToTray: boolean;
   view: ViewMode;
   checkUpdates: boolean;
+  lastSeenVersion: string;
 }
 
 export interface SystemUsage {
@@ -242,6 +243,9 @@ export function toApiError(value: unknown): ApiError {
 export const api = {
   snapshot: () => invoke<Snapshot>("get_snapshot"),
 
+  /** What the running version changed, or null if it says nothing. */
+  changelog: () => invoke<string | null>("get_changelog"),
+
   logs: (projectId: string, since?: number) =>
     invoke<LogLine[]>("get_logs", { projectId, since }),
   clearLogs: (projectId: string) => invoke<void>("clear_logs", { projectId }),
@@ -271,6 +275,9 @@ export const api = {
   updateSettings: (settings: Settings) =>
     invoke<Settings>("update_settings", { settings }),
   autostartState: () => invoke<boolean>("get_autostart_state"),
+  /** Drops a project's cached icon and fetches it again. */
+  refreshFavicon: (projectId: string) => invoke<void>("refresh_favicon", { projectId }),
+
   importIcon: (source: string) => invoke<string>("import_icon", { source }),
 
   revealFolder: (path: string) => invoke<void>("reveal_folder", { path }),

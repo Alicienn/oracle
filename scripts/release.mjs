@@ -15,8 +15,8 @@
  * Usage:
  *
  *   npm run release
- *   npm run release -- --notes "What changed in this one"
  *   npm run release -- --dry-run
+ *   npm run release -- --notes "Something other than the changelog entry"
  *
  * The key is handed over as a path, not as its contents, so it never passes through this
  * script, an argument list, or a shell history.
@@ -38,7 +38,6 @@ const PLATFORM = "windows-x86_64";
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
-const notes = valueOf("--notes") ?? "Installer below. An existing installation updates itself from this release.";
 
 function valueOf(flag) {
   const at = args.indexOf(flag);
@@ -95,6 +94,34 @@ if (!existsSync(KEY)) {
       "  ORACLE_SIGNING_KEY at an existing key.",
   );
 }
+
+// An update that cannot say what it changed is an update nobody has a reason to accept —
+// and the app shows this section to whoever it just updated, so a missing one ships a
+// version that answers "what's new" with nothing. Cheaper to refuse here than to notice
+// after publishing.
+const lines = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8").split("\n");
+const heading = lines.findIndex((line) => line.trim() === `## ${version}`);
+
+if (heading === -1) {
+  fail(
+    `CHANGELOG.md has no "## ${version}" section.\n` +
+      "  Add one describing what this release changes, then release again.",
+  );
+}
+
+// Everything until the next version heading. Matching the same way the app's own parser
+// does, so the release notes and what the app shows cannot disagree.
+const rest = lines.slice(heading + 1);
+const next = rest.findIndex((line) => line.trimStart().startsWith("## "));
+const entry = (next === -1 ? rest : rest.slice(0, next)).join("\n").trim();
+
+if (!entry) {
+  fail(`The "## ${version}" section of CHANGELOG.md is empty.`);
+}
+
+// The changelog entry *is* the release notes. Writing them twice is how the two drift, and
+// the app shows the same text to whoever it updates.
+const notes = valueOf("--notes") ?? entry;
 
 // A published release must never be overwritten: that is how an installation ends up offered
 // a build it already has, under a version it does not.

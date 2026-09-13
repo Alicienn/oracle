@@ -249,6 +249,26 @@ pub fn spawn_favicon_sweep(app: AppHandle) {
     });
 }
 
+/// Drops a project's cached icon and fetches it again.
+///
+/// The sweep and the per-project resolve both stop at the cache, which is the point of it.
+/// Asking for the icon again is a deliberate act, so it is a deliberate path.
+pub fn spawn_favicon_refresh(app: AppHandle, project_id: String, url: String) {
+    tauri::async_runtime::spawn(async move {
+        let Some(state) = app.try_state::<Arc<AppState>>() else {
+            return;
+        };
+
+        favicon::forget(&url);
+        state.favicons.write().remove(&project_id);
+
+        // Emitted either way: the icon may legitimately have gone away, and the UI has to
+        // stop showing the old one.
+        store_favicon(&state, &project_id, &url).await;
+        let _ = app.emit(ICONS_EVENT, ());
+    });
+}
+
 /// Resolves the icon for one project, for a project added or edited after startup.
 pub fn spawn_favicon_for(app: AppHandle, project_id: String, url: String) {
     tauri::async_runtime::spawn(async move {

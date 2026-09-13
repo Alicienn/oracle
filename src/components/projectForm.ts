@@ -191,6 +191,38 @@ export function showProjectForm(existing?: Project): void {
     },
   });
 
+  /**
+   * Fetches the site's icon again, past the cache.
+   *
+   * The icon is downloaded once and kept, which is what makes it instant and offline. A site
+   * that changes its icon — or served something wrong the one time Oracle asked — would
+   * otherwise be stuck with the old file for good, so the way out is explicit.
+   *
+   * Only offered where there is something to fetch: an existing project with a URL.
+   */
+  const refetch = button({
+    label: "Refetch favicon",
+    onClick: async () => {
+      refetch.disabled = true;
+      iconLabel.textContent = "Fetching the site's icon…";
+
+      try {
+        await api.refreshFavicon(draft.id);
+        // The backend answers through an event, and the icon may legitimately turn out not
+        // to exist, so this reports what was done rather than what was found.
+        iconLabel.textContent = "Asked the site for its icon again.";
+      } catch (error) {
+        iconLabel.textContent = AUTOMATIC;
+        reportError("Could not fetch the icon", error);
+      } finally {
+        refetch.disabled = false;
+      }
+    },
+  });
+
+  /** Only where there is something to fetch: a saved project with a URL. */
+  const canRefetch = Boolean(existing?.id && existing.remote?.url);
+
   const body = h(
     "form",
     { id: "project-form", onSubmit: (event: Event) => event.preventDefault() },
@@ -221,7 +253,11 @@ export function showProjectForm(existing?: Project): void {
 
     h("p", { class: "section__label" }, "Appearance"),
     field("Accent colour", accentInput),
-    field("Icon", h("div", { class: "row" }, pickIcon, clearIcon), undefined),
+    field(
+      "Icon",
+      h("div", { class: "row" }, pickIcon, clearIcon, canRefetch ? refetch : null),
+      undefined,
+    ),
     iconLabel,
   );
 

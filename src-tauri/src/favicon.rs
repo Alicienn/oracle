@@ -51,6 +51,16 @@ pub fn cached(page_url: &str) -> Option<PathBuf> {
         .find(|path| path.file_stem().is_some_and(|found| found == stem.as_str()))
 }
 
+/// Deletes whatever was cached for this URL.
+///
+/// For a site that has changed its icon, or served something wrong once: the cache is keyed
+/// by URL and would otherwise answer with the old file forever.
+pub fn forget(page_url: &str) {
+    if let Some(path) = cached(page_url) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Resolves the icon for a page and writes it to the cache, returning where it landed.
 ///
 /// Returns `None` for anything that does not lead to a usable image, which is a normal

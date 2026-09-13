@@ -1,6 +1,7 @@
 //! Oracle — a command center for local and remote projects.
 
 pub mod autostart;
+pub mod changelog;
 pub mod commands;
 pub mod config;
 pub mod discovery;
@@ -61,6 +62,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
+            commands::get_changelog,
             commands::get_logs,
             commands::clear_logs,
             commands::git_status,
@@ -77,6 +79,7 @@ pub fn run() {
             commands::update_settings,
             commands::get_autostart_state,
             commands::import_icon,
+            commands::refresh_favicon,
             commands::reveal_folder,
             commands::show_main_window,
             commands::hide_panel,

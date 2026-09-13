@@ -112,6 +112,12 @@ pub fn get_snapshot(state: St) -> Snapshot {
     }
 }
 
+/// What the running version changed, for the panel shown after an update.
+#[tauri::command]
+pub fn get_changelog() -> Option<String> {
+    crate::changelog::for_version(env!("CARGO_PKG_VERSION"))
+}
+
 #[tauri::command]
 pub fn get_logs(state: St, project_id: String, since: Option<u64>) -> Vec<LogLine> {
     state.runner.logs(&project_id, since)
@@ -362,6 +368,29 @@ pub fn update_settings(state: St, settings: Settings) -> Result<Settings> {
 #[tauri::command]
 pub fn get_autostart_state() -> bool {
     autostart::is_enabled()
+}
+
+/// Fetches a remote project's icon again, ignoring what was cached.
+///
+/// Returns nothing: resolution is a network round trip, and the UI is told through the same
+/// event the startup sweep uses rather than waiting on it here.
+#[tauri::command]
+pub fn refresh_favicon(app: AppHandle, state: St, project_id: String) -> Result<()> {
+    let url = {
+        let config = state.config.read();
+        let project = config
+            .project(&project_id)
+            .ok_or_else(|| OracleError::ProjectNotFound(project_id.clone()))?;
+
+        project
+            .remote
+            .as_ref()
+            .map(|remote| remote.url.clone())
+            .ok_or_else(|| OracleError::NoRemoteTarget(project.name.clone()))?
+    };
+
+    crate::tasks::spawn_favicon_refresh(app, project_id, url);
+    Ok(())
 }
 
 /// Copies a user-chosen image into Oracle's own data directory.

@@ -4,7 +4,7 @@ import type { ProjectView, Usage } from "../lib/api";
 import { h, fill } from "../lib/dom";
 import { bytes, percent, shortPath } from "../lib/format";
 import { brandMark } from "../lib/icons";
-import { open, toggle } from "../lib/actions";
+import { open, reorder, toggle } from "../lib/actions";
 import { get, patch } from "../lib/store";
 import {
   activatable,
@@ -90,6 +90,7 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
     {
       class: "card glass glass--live",
       "aria-label": project.name,
+      draggable: "true",
       // `key` is how the filter transition recognises a card across a rebuild, so it can
       // slide to its new row instead of being destroyed and recreated in place.
       dataset: { selected: String(selected), key: project.id },
@@ -137,5 +138,70 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
     ),
   );
 
+  draggable(node, project.id);
+
   return activatable(node, () => patch({ selectedId: project.id, tab: "overview" }), ".card__actions");
+}
+
+/**
+ * Which card is being dragged, shared across every card in the list.
+ *
+ * Module scope rather than a closure: the drop handler that needs it belongs to a different
+ * card than the one the drag started on.
+ */
+let dragging: string | null = null;
+
+/**
+ * Makes a card a drag handle for reordering.
+ *
+ * Uses the native drag events, as the rail does: the browser already provides the drag
+ * image, the autoscroll and cancel-on-escape, all of which a pointer-move implementation
+ * would have to rebuild.
+ */
+function draggable(node: HTMLElement, id: string): void {
+  node.addEventListener("dragstart", (event) => {
+    dragging = id;
+    node.dataset.dragging = "true";
+    event.dataTransfer?.setData("text/plain", id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+
+  node.addEventListener("dragend", () => {
+    dragging = null;
+    delete node.dataset.dragging;
+  });
+
+  node.addEventListener("dragover", (event) => {
+    if (!dragging || dragging === id) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  });
+
+  node.addEventListener("drop", (event) => {
+    event.preventDefault();
+    if (!dragging || dragging === id) return;
+
+    moveBefore(dragging, id);
+  });
+}
+
+/**
+ * Moves one project to another's position, across the whole project list.
+ *
+ * Deliberately not computed from what is on screen. A filter hides projects, and a search
+ * hides more; reordering only the visible ones would renumber them from zero and drag every
+ * hidden project along behind them. So the move is applied to the full list in its stored
+ * order, and the filtered view is only how the user pointed at the two ends of it.
+ */
+function moveBefore(id: string, targetId: string): void {
+  const ordered = [...get().projects]
+    .sort((a, b) => a.order - b.order)
+    .map((project) => project.id);
+
+  const from = ordered.indexOf(id);
+  const to = ordered.indexOf(targetId);
+  if (from < 0 || to < 0) return;
+
+  ordered.splice(to, 0, ...ordered.splice(from, 1));
+  void reorder(ordered);
 }
