@@ -8,7 +8,15 @@ import { api } from "../lib/api";
 import { open, remove, restart, revealFolder, toggle, toggleFavorite } from "../lib/actions";
 import { get, loadGit, loadLogs, patch, type Tab } from "../lib/store";
 import { showProjectForm } from "./projectForm";
-import { button, iconTile, remoteLabel, statusDot, statusLabel } from "./common";
+import {
+  button,
+  iconTile,
+  isLive,
+  pendingLabel,
+  remoteLabel,
+  statusDot,
+  statusLabel,
+} from "./common";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -24,7 +32,7 @@ export function renderDetail(host: HTMLElement, project: ProjectView | null): vo
   }
 
   const state = get();
-  const live = project.status === "running" || project.status === "starting";
+  const live = isLive(project.status, state.pending[project.id]);
 
   const head = h(
     "div",
@@ -158,7 +166,9 @@ function overviewPane(project: ProjectView, live: boolean): HTMLElement {
               : "Start",
           iconName: live ? "stop" : "play",
           variant: live ? undefined : "primary",
+          title: pending ? pendingLabel(pending.kind, project.name) : undefined,
           pending: pending?.since,
+          disabled: pending?.kind === "stop",
           onClick: () => void toggle(project),
         })
       : null,

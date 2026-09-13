@@ -184,7 +184,11 @@ function exit(host: HTMLElement, departed: { node: HTMLElement; box: Box }[]): v
     );
   }
 
-  host.parentElement?.appendChild(overlay);
+  // Parented to the body rather than next to the host: `position: fixed` resolves against
+  // whichever ancestor establishes a containing block, and a `transform` or `filter` added
+  // to a wrapper later would silently start misplacing the whole overlay. The body cannot
+  // acquire one without breaking the window chrome, so it is the one safe anchor.
+  document.body.appendChild(overlay);
 
   // One listener on the last animation rather than a counter: they all start together and
   // share a duration, so the last to be created is the last to finish.

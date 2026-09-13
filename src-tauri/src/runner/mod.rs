@@ -131,6 +131,14 @@ impl ProcessManager {
             .as_ref()
             .ok_or_else(|| OracleError::NoLocalTarget(project.name.clone()))?;
 
+        // A crashed project keeps its handle so its logs stay readable after the fact. That
+        // handle is a dead process, and refusing to start over it left the project stuck:
+        // `start` said it was already running and `stop` had nothing to kill. Starting is
+        // the request to move on, so the corpse is cleared here.
+        if matches!(self.status(&project.id), ProjectStatus::Crashed) {
+            self.handles.write().remove(&project.id);
+        }
+
         if self.is_running(&project.id) {
             return Err(OracleError::AlreadyRunning(project.name.clone()));
         }
@@ -894,6 +902,35 @@ mod tests {
             .await
             .expect("the override should clear the conflict");
         assert!(manager.is_running(&project.id));
+    }
+
+    #[tokio::test]
+    async fn a_crashed_project_can_be_started_again() {
+        let (sink, _) = recording_sink();
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
+
+        // Exits non-zero without being asked to, which is what the runner calls a crash.
+        #[cfg(windows)]
+        let project = project_running("cmd /C exit 1");
+        #[cfg(not(windows))]
+        let project = project_running("false");
+
+        manager.start(&project, None).await.expect("should spawn");
+
+        // Wait for the exit watcher to classify it.
+        for _ in 0..40 {
+            if matches!(manager.status(&project.id), ProjectStatus::Crashed) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(manager.status(&project.id), ProjectStatus::Crashed);
+
+        // The dead handle must not stand in the way of trying again.
+        manager
+            .start(&project, None)
+            .await
+            .expect("a crashed project should start again");
     }
 
     #[tokio::test]

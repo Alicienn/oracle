@@ -18,6 +18,7 @@ import { clearToasts } from "./lib/toast";
 import {
   button,
   iconTile,
+  isLive,
   pendingLabel,
   remoteDot,
   remoteLabel,
@@ -97,9 +98,9 @@ function renderSearch(): HTMLElement {
 }
 
 function row(project: ProjectView): HTMLElement {
-  const live = project.status === "running" || project.status === "starting";
   const usage = get().usage[project.id];
   const pending = get().pending[project.id];
+  const live = isLive(project.status, pending);
 
   const meta: (HTMLElement | string)[] = [];
 
@@ -145,6 +146,7 @@ function row(project: ProjectView): HTMLElement {
               ? `Stop ${project.name}`
               : `Start ${project.name}`,
           pending: pending?.since,
+          disabled: pending?.kind === "stop",
           onClick: () => void toggle(project),
         })
       : project.resolvedUrl

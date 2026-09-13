@@ -15,13 +15,24 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
 ///
 /// A dev server binds its port only once it is genuinely ready to serve, which makes this a
 /// far better readiness signal than "the process exists".
+///
+/// Both loopback stacks are tried, and either one answering is enough. Probing only IPv4
+/// was wrong in a way that showed up as a healthy project reported as unresponsive: `next
+/// dev -H localhost` resolves to `[::1]` on this platform and never binds `127.0.0.1`, so
+/// the server was answering on a socket nothing was asking about.
 pub async fn is_port_open(port: u16) -> bool {
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    for ip in [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)] {
+        let addr = SocketAddr::new(ip, port);
 
-    matches!(
-        tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await,
-        Ok(Ok(_))
-    )
+        if matches!(
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await,
+            Ok(Ok(_))
+        ) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Waits for the port to open, giving up after `timeout`.
@@ -226,6 +237,18 @@ Active Connections
     #[tokio::test]
     async fn a_bound_port_reads_as_open() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        assert!(is_port_open(port).await);
+    }
+
+    #[tokio::test]
+    async fn a_server_on_ipv6_loopback_reads_as_open() {
+        // What `next dev -H localhost` does. Probing IPv4 alone reported this as closed and
+        // left a working project sitting at "Not responding" for a minute.
+        let Ok(listener) = tokio::net::TcpListener::bind("[::1]:0").await else {
+            return;
+        };
         let port = listener.local_addr().unwrap().port();
 
         assert!(is_port_open(port).await);

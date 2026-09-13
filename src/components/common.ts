@@ -31,9 +31,34 @@ export function statusLabel(status: ProjectStatus): string {
   }
 }
 
-/** What a button says while its operation is in flight. */
+/**
+ * Whether the runner is holding this project, and the stop button is the one to show.
+ *
+ * Not the same question as "is it serving". `unhealthy` is a live process whose port never
+ * answered — stopping it is the only thing left to do with it, and treating it as idle made
+ * the button try to start it again and collect an "already running" error. A pending start
+ * counts too: the request is in flight, so the way out is to stop it.
+ *
+ * `crashed` is deliberately absent. The process is gone, so the button should offer a fresh
+ * start; the backend clears the dead handle when one arrives.
+ */
+export function isLive(status: ProjectStatus, pending?: { kind: "start" | "stop" }): boolean {
+  return (
+    status === "running" ||
+    status === "starting" ||
+    status === "unhealthy" ||
+    pending?.kind === "start"
+  );
+}
+
+/**
+ * What a button says while its operation is in flight.
+ *
+ * A pending start spells out that it can still be abandoned: the button stays live, and a
+ * spinner on its own does not tell anyone that clicking it now stops the project.
+ */
 export function pendingLabel(kind: "start" | "stop", name: string): string {
-  return kind === "start" ? `Starting ${name}…` : `Stopping ${name}…`;
+  return kind === "start" ? `Starting ${name}… — click to stop` : `Stopping ${name}…`;
 }
 
 export function remoteLabel(status: RemoteStatus): string {
@@ -163,11 +188,12 @@ interface ButtonOptions {
   iconName?: IconName;
   disabled?: boolean;
   /**
-   * Shows a spinner in place of the icon and refuses clicks.
+   * Shows a spinner in place of the icon. The value is when the operation began, which the
+   * spinner needs to stay in phase across re-renders.
    *
-   * The value is when the operation began, which the spinner needs to stay in phase across
-   * re-renders. Refusing clicks is part of the same option on purpose: a button that shows
-   * work in progress and still accepts a second click is worse than one that shows nothing.
+   * Deliberately independent of `disabled`. A start can take up to a minute to be answered,
+   * and a button that spins *and* refuses clicks for that long leaves no way to abandon a
+   * project that is not coming up — the spinner says "working", not "untouchable".
    */
   pending?: number;
   onClick: (event: MouseEvent) => void;
@@ -185,7 +211,7 @@ export function button(options: ButtonOptions): HTMLButtonElement {
       type: "button",
       title: options.title ?? options.label ?? "",
       "aria-label": options.title ?? options.label ?? "",
-      disabled: options.disabled || options.pending !== undefined,
+      disabled: options.disabled,
       dataset: { pending: options.pending !== undefined ? "true" : undefined },
       onClick: (event: Event) => {
         event.stopPropagation();

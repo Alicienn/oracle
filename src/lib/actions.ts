@@ -15,6 +15,7 @@ import {
   reportError,
   setPending,
 } from "./store";
+import { isLive } from "../components/common";
 import { askAboutPort } from "../components/portConflict";
 import { toast } from "./toast";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -37,6 +38,7 @@ export async function start(project: ProjectView, port?: number): Promise<void> 
 
   // Optimistic on both counts: the spinner should appear on the click, not on the round
   // trip, and the status dot should not claim the project is stopped while it boots.
+  const previous = project.status;
   setPending(project.id, "start");
   patchProject(project.id, { status: "starting" });
 
@@ -44,7 +46,10 @@ export async function start(project: ProjectView, port?: number): Promise<void> 
     await api.start(project.id, port);
   } catch (error) {
     clearPending(project.id);
-    patchProject(project.id, { status: "stopped" });
+    // Back to what it was, not to "stopped". A refused start says nothing about the
+    // project's state, and "already running" in particular means something *is* alive —
+    // writing "stopped" over that lost track of a real process.
+    patchProject(project.id, { status: previous });
 
     // A port collision is the one failure with an obvious next move, so it gets a decision
     // rather than a toast the user can only dismiss.
@@ -82,6 +87,7 @@ export async function restart(project: ProjectView): Promise<void> {
     await api.restart(project.id);
   } catch (error) {
     clearPending(project.id);
+    // A restart stops first, so a failure here does leave the project down.
     patchProject(project.id, { status: "stopped" });
 
     const conflict = portConflict(error);
@@ -96,12 +102,14 @@ export async function restart(project: ProjectView): Promise<void> {
 }
 
 export async function toggle(project: ProjectView): Promise<void> {
-  // A second click while the first is unanswered would either start a project twice or
-  // stop one mid-stop. The button renders disabled; this guards the keyboard path too.
-  if (pendingFor(project.id)) return;
+  const pending = pendingFor(project.id);
 
-  const live = project.status === "running" || project.status === "starting";
-  return live ? stop(project) : start(project);
+  // A second stop is meaningless, and the button is disabled for it anyway; this guards the
+  // keyboard path. A pending *start* stays actionable on purpose — it is the only way to
+  // abandon a project that is not coming up, and it must not read as a fresh start.
+  if (pending?.kind === "stop") return;
+
+  return isLive(project.status, pending) ? stop(project) : start(project);
 }
 
 /**
@@ -193,7 +201,7 @@ export async function reorder(orderedIds: string[]): Promise<void> {
 /** Starts everything that is configured to run locally and is not already up. */
 export async function startAll(): Promise<void> {
   const idle = get().projects.filter(
-    (project) => project.local && project.status !== "running" && project.status !== "starting",
+    (project) => project.local && !isLive(project.status, pendingFor(project.id)),
   );
 
   for (const project of idle) {
@@ -202,8 +210,8 @@ export async function startAll(): Promise<void> {
 }
 
 export async function stopAll(): Promise<void> {
-  const live = get().projects.filter(
-    (project) => project.status === "running" || project.status === "starting",
+  const live = get().projects.filter((project) =>
+    isLive(project.status, pendingFor(project.id)),
   );
 
   for (const project of live) {

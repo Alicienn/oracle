@@ -10,6 +10,7 @@ import {
   button,
   emptyState,
   iconTile,
+  isLive,
   pendingLabel,
   remoteDot,
   remoteLabel,
@@ -59,9 +60,9 @@ export function renderList(
 }
 
 function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
-  const live = project.status === "running" || project.status === "starting";
   const selected = project.id === get().selectedId;
   const pending = get().pending[project.id];
+  const live = isLive(project.status, pending);
 
   const meta: (HTMLElement | string)[] = [h("span", { class: "tag" }, project.kindLabel)];
 
@@ -125,6 +126,7 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
                 ? `Stop ${project.name}`
                 : `Start ${project.name}`,
             pending: pending?.since,
+            disabled: pending?.kind === "stop",
             onClick: () => void toggle(project),
           })
         : null,

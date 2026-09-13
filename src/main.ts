@@ -25,6 +25,7 @@ import {
 import { startAll, stopAll } from "./lib/actions";
 import {
   button,
+  isLive,
   segmented,
   setButtonIcon,
   setSegmentedValue,
@@ -166,9 +167,8 @@ function buildToolbar(): void {
 }
 
 function anyRunning(): boolean {
-  return get().projects.some(
-    (project) => project.status === "running" || project.status === "starting",
-  );
+  const state = get();
+  return state.projects.some((project) => isLive(project.status, state.pending[project.id]));
 }
 
 function syncToolbar(): void {
