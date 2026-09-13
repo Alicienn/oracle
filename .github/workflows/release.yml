@@ -1,0 +1,70 @@
+# Builds the installer and publishes it as a GitHub release.
+#
+# The release is what Oracle's updater reads: `tauri-action` uploads the NSIS installer, its
+# signature, and a `latest.json` describing them. The app polls
+# `releases/latest/download/latest.json`, so whichever release is marked latest is the one
+# users are offered.
+#
+# Cutting a release is pushing a tag:
+#
+#   npm version patch && git push --follow-tags
+#
+# The tag must match the version in `src-tauri/tauri.conf.json`, or the updater will offer an
+# update that reports the version it is replacing.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Lets a release be rebuilt without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build
+        required: true
+
+permissions:
+  # tauri-action creates the release and uploads the artifacts.
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Keyed on the lockfile: a dependency change rebuilds, a source change does not.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without these the bundle is built unsigned, and the updater refuses anything it
+          # cannot verify against the public key in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: Oracle ${{ github.event.inputs.tag || github.ref_name }}
+          releaseBody: |
+            Installer below. An existing installation updates itself from this release.
+          releaseDraft: false
+          prerelease: false
+          # Writes the manifest the updater reads.
+          includeUpdaterJson: true

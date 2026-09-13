@@ -21,6 +21,8 @@
     "autostart:default",
     "dialog:allow-open",
     "core:webview:allow-internal-toggle-devtools",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

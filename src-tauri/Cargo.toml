@@ -31,6 +31,9 @@ chrono = "0.4.45"
 parking_lot = "0.12.5"
 window-vibrancy = "0.8.0"
 tauri-plugin-dialog = "2.7.3"
+# Self-update, and the restart that has to follow an install.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56.0"

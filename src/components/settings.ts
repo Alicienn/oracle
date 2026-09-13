@@ -8,6 +8,8 @@ import { get, reportError, saveSettings } from "../lib/store";
 import { brandMark } from "../lib/icons";
 import { button, segmented, toggleRow } from "./common";
 import { closeModal, showModal } from "./modal";
+import { showUpdatePrompt } from "./updatePrompt";
+import { checkNow } from "../lib/updates";
 
 export function showSettings(): void {
   const state = get();
@@ -205,6 +207,35 @@ export function showSettings(): void {
     style: { color: "var(--accent)", display: "flex" },
   });
 
+  const updateStatus = h("span", { class: "field__hint" });
+
+  const checkButton = button({
+    label: "Check for updates",
+    onClick: async () => {
+      checkButton.disabled = true;
+      updateStatus.textContent = "Checking…";
+
+      const { update, error } = await checkNow();
+
+      checkButton.disabled = false;
+
+      if (error) {
+        // Named plainly: the user asked, so "could not check" is the answer, not silence.
+        updateStatus.textContent = "Could not reach the release feed.";
+        return;
+      }
+
+      if (!update) {
+        updateStatus.textContent = "Oracle is up to date.";
+        return;
+      }
+
+      updateStatus.textContent = "";
+      closeModal();
+      showUpdatePrompt(update, get().version);
+    },
+  });
+
   const about = h(
     "div",
     { class: "section" },
@@ -223,6 +254,18 @@ export function showSettings(): void {
           `Version ${state.version || "0.1.0"}${state.gitAvailable ? "" : " · git not found on PATH"}`,
         ),
       ),
+    ),
+    toggleRow(
+      "Check for updates at launch",
+      "Asks GitHub once, when Oracle starts, whether a newer release exists.",
+      settings.checkUpdates,
+      (checkUpdates) => void saveSettings({ checkUpdates }),
+    ),
+    h(
+      "div",
+      { style: { display: "flex", alignItems: "center", gap: "12px", marginTop: "8px" } },
+      checkButton,
+      updateStatus,
     ),
   );
 
