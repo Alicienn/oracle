@@ -50,15 +50,32 @@ function fail(message) {
   process.exit(1);
 }
 
-/** Runs a command, letting its output through, and stops the release if it fails. */
-function run(command, commandArgs, env = {}) {
+/**
+ * Runs a command, letting its output through, and stops the release if it fails.
+ *
+ * `shell` is opt-in, and only `npm` needs it: it is a `.cmd` on Windows and cannot be
+ * spawned without one. Everywhere else it must stay off, because a shell flattens the
+ * argument array into a string with no quoting — which turned `--title Oracle 0.1.1` into
+ * three arguments and left `gh` looking for a file called 0.1.1.
+ */
+function run(command, commandArgs, { env = {}, shell = false } = {}) {
   console.log(`\n$ ${command} ${commandArgs.join(" ")}`);
   execFileSync(command, commandArgs, {
     cwd: ROOT,
     stdio: "inherit",
     env: { ...process.env, ...env },
-    shell: process.platform === "win32",
+    shell,
   });
+}
+
+/** True when the command succeeds, with its output swallowed. For asking questions. */
+function succeeds(command, commandArgs) {
+  try {
+    execFileSync(command, commandArgs, { cwd: ROOT, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -75,30 +92,41 @@ if (!existsSync(KEY)) {
   fail(
     `No signing key at ${KEY}.\n` +
       "  Generate one with `npm run tauri signer generate -- -w <path>`, or point\n" +
-      "  TAURI_SIGNING_PRIVATE_KEY_PATH at an existing key.",
+      "  ORACLE_SIGNING_KEY at an existing key.",
   );
 }
 
-// A tag that already exists means a release that already exists: overwriting one is how an
-// installation ends up offered a build it already has, under a version it does not.
-const existing = execFileSync("git", ["tag", "--list", tag], { cwd: ROOT }).toString().trim();
-if (existing) {
+// A published release must never be overwritten: that is how an installation ends up offered
+// a build it already has, under a version it does not.
+if (succeeds("gh", ["release", "view", tag])) {
   fail(
-    `Tag ${tag} already exists. Bump "version" in src-tauri/tauri.conf.json\n` +
+    `Oracle ${version} is already published. Bump "version" in src-tauri/tauri.conf.json\n` +
       "  (and package.json, and src-tauri/Cargo.toml) before releasing again.",
   );
 }
 
+// A tag with no release behind it is a release that stopped part way through, so it is
+// resumed rather than refused. The alternative is asking someone to delete a tag by hand
+// before they can retry, which is a poor answer to "the last step failed".
+const tagged =
+  execFileSync("git", ["tag", "--list", tag], { cwd: ROOT }).toString().trim() !== "";
+
 console.log(`\nReleasing Oracle ${version}\n  key: ${KEY}`);
+if (tagged) {
+  console.log(`  ${tag} is already tagged: resuming an interrupted release.`);
+}
 
 run("npm", ["run", "tauri", "build"], {
-  // The variable takes either the key's contents or a path to it, and a path is what is
-  // wanted: nothing then reads the key but the bundler. Note that
-  // TAURI_SIGNING_PRIVATE_KEY_PATH, which the key generator advertises, is not read by the
-  // build at all — passing the path there produces "no private key found".
-  TAURI_SIGNING_PRIVATE_KEY: KEY,
-  // Set explicitly: an unset variable makes the bundler prompt, which hangs a script.
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "",
+  shell: true,
+  env: {
+    // The variable takes either the key's contents or a path to it, and a path is what is
+    // wanted: nothing then reads the key but the bundler. Note that
+    // TAURI_SIGNING_PRIVATE_KEY_PATH, which the key generator advertises, is not read by the
+    // build at all — passing the path there produces "no private key found".
+    TAURI_SIGNING_PRIVATE_KEY: KEY,
+    // Set explicitly: an unset variable makes the bundler prompt, which hangs a script.
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "",
+  },
 });
 
 const bundle = join(ROOT, "src-tauri", "target", "release", "bundle", "nsis");
@@ -134,7 +162,10 @@ if (dryRun) {
 }
 
 // Tag from the commit being released, so the release and the source agree.
-run("git", ["tag", tag]);
+if (!tagged) {
+  run("git", ["tag", tag]);
+}
+// Pushed every time: the tag may exist locally from an attempt that stopped before this.
 run("git", ["push", "origin", tag]);
 
 run("gh", [
