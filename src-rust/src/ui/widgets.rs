@@ -299,3 +299,90 @@ impl Ui<'_> {
         );
     }
 }
+
+impl Ui<'_> {
+    /// An editable text field.
+    ///
+    /// Returns true when the value changed this frame. The caret is drawn at the end of the
+    /// text because that is the only place editing can happen — see `Input::edit`. Showing a
+    /// caret the user could not move would be a lie, so it only appears while focused.
+    pub fn field(
+        &mut self,
+        key: &str,
+        rect: Rect,
+        value: &mut String,
+        placeholder: &str,
+        text_width: f32,
+    ) -> bool {
+        let widget = id("field", key);
+        let response = self.input.interact(widget, rect, self.dt);
+        let palette = self.palette;
+
+        if response.clicked {
+            self.input.focus_on(widget);
+        }
+        let focused = self.input.has_focus(widget);
+
+        self.frame.panel(rect, GlassStyle::sunken(&palette), 1.0);
+        if focused {
+            // A ring rather than a fill, so the text stays as legible as it was.
+            self.frame
+                .fill(rect, fade(palette.accent, 0.10), radius::SM);
+        } else if response.hover > 0.01 {
+            self.frame
+                .fill(rect, fade(palette.line, response.hover * 0.5), radius::SM);
+        }
+
+        let changed = if focused {
+            self.input.edit(value)
+        } else {
+            false
+        };
+
+        let showing_placeholder = value.is_empty() && !focused;
+        let shown = if showing_placeholder { placeholder } else { value.as_str() };
+        let ink = if showing_placeholder {
+            palette.muted
+        } else {
+            palette.ink
+        };
+
+        let text_y = rect[1] + (rect[3] - text::BASE * 1.35) * 0.5;
+        self.frame.text(
+            Run::new(shown, rect[0] + gap::MD, text_y, text::BASE, ink)
+                .clip([rect[0], rect[1], rect[2], rect[3]]),
+        );
+
+        if focused && self.input.caret_visible(self.dt) {
+            // Positioned from a measured width rather than a character count, so it does not
+            // drift on proportional type.
+            let caret_x = rect[0] + gap::MD + text_width.min(rect[2] - gap::MD * 2.0);
+            self.frame.fill(
+                [caret_x + 1.0, rect[1] + 8.0, 1.5, rect[3] - 16.0],
+                palette.accent,
+                0.75,
+            );
+        }
+
+        changed
+    }
+
+    /// A field with a label above it, as the project form uses throughout.
+    pub fn labelled_field(
+        &mut self,
+        key: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        label: &str,
+        value: &mut String,
+        placeholder: &str,
+        text_width: f32,
+    ) -> bool {
+        let palette = self.palette;
+        self.frame.text(
+            Run::new(label, x, y, text::SM, palette.ink_soft).weight(570),
+        );
+        self.field(key, [x, y + 20.0, width, 32.0], value, placeholder, text_width)
+    }
+}

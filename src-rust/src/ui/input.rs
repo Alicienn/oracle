@@ -55,6 +55,17 @@ pub struct Input {
     /// which is what lets a user press a button and slide off to cancel.
     captured: Option<Id>,
 
+    /// Which text field has the keyboard, if any.
+    pub focus: Option<Id>,
+    /// Seconds since the caret last changed state, for the blink.
+    pub caret: f32,
+    /// Set when a field claimed the press this frame.
+    ///
+    /// A press that no field claimed drops focus. Only a click *inside* a field may set
+    /// this — an earlier version let any focused field set it, which meant focus never
+    /// moved and every keystroke kept going to the first field touched.
+    focus_taken: bool,
+
     states: HashMap<Id, WidgetState>,
     /// Widgets touched this frame, so stale entries can be dropped.
     seen: Vec<Id>,
@@ -141,6 +152,13 @@ impl Input {
     /// Called at the end of a frame. Clears one-shot events and forgets widgets that were
     /// not drawn, so a long session does not accumulate state for screens nobody visits.
     pub fn end_frame(&mut self) {
+        // A press that landed on nothing claiming focus drops it, which is what every other
+        // interface does and what makes a form usable at all.
+        if self.just_released && !self.focus_taken {
+            self.focus = None;
+        }
+        self.focus_taken = false;
+
         self.just_pressed = false;
         self.just_released = false;
         self.scroll = 0.0;
@@ -160,6 +178,63 @@ impl Input {
 
     pub fn pressed_key(&self, key: Key) -> bool {
         self.keys.contains(&key)
+    }
+
+    /// Gives the keyboard to a field, restarting the caret so it is visible immediately.
+    ///
+    /// A caret that happens to be mid-blink when a field is clicked reads as a field that
+    /// did not take focus.
+    pub fn focus_on(&mut self, widget: Id) {
+        self.focus_taken = true;
+        if self.focus != Some(widget) {
+            self.focus = Some(widget);
+            self.caret = 0.0;
+        }
+    }
+
+
+    pub fn blur(&mut self) {
+        self.focus = None;
+    }
+
+    pub fn has_focus(&self, widget: Id) -> bool {
+        self.focus == Some(widget)
+    }
+
+    /// Advances the caret clock. Returns true while the caret should be drawn.
+    pub fn caret_visible(&mut self, dt: f32) -> bool {
+        self.caret += dt;
+        // A second on, half a second off: long enough not to nag, short enough to find.
+        self.caret % 1.5 < 1.0
+    }
+
+    /// Applies this frame's typing to a string, and reports whether it changed.
+    ///
+    /// Deliberately small: insertion at the end, backspace, and nothing else. Selection,
+    /// word motion and IME are real work, and a field that cannot yet do them is far better
+    /// than a form that cannot be filled in at all.
+    pub fn edit(&mut self, value: &mut String) -> bool {
+        let mut changed = false;
+
+        if self.keys.contains(&Key::Backspace) && value.pop().is_some() {
+            changed = true;
+        }
+
+        for character in self.typed.chars() {
+            // Control characters arrive here as well as printable ones.
+            if !character.is_control() {
+                value.push(character);
+                changed = true;
+            }
+        }
+
+        if changed {
+            // Any edit restarts the blink, so the caret is visible where the text just
+            // appeared rather than possibly dark at that instant.
+            self.caret = 0.0;
+        }
+
+        changed
     }
 }
 
@@ -308,6 +383,94 @@ mod tests {
         assert_eq!(input.scroll, 0.0);
         assert!(input.typed.is_empty());
         assert!(input.keys.is_empty());
+    }
+
+    #[test]
+    fn a_press_that_claims_no_field_drops_focus() {
+        let mut input = Input::default();
+        let field = id("field", "name");
+
+        input.focus_on(field);
+        input.end_frame();
+        assert!(input.has_focus(field));
+
+        // A press somewhere no field claimed.
+        input.just_released = true;
+        input.end_frame();
+        assert!(!input.has_focus(field), "clicking away must drop focus");
+    }
+
+    #[test]
+    fn focusing_a_field_survives_the_same_frames_press() {
+        let mut input = Input::default();
+        let field = id("field", "name");
+
+        // What a field does when it is clicked: claim focus during the frame.
+        input.just_released = true;
+        input.focus_on(field);
+        input.end_frame();
+
+        assert!(input.has_focus(field));
+    }
+
+    #[test]
+    fn focus_survives_a_frame_with_no_press_at_all() {
+        let mut input = Input::default();
+        let field = id("field", "name");
+
+        input.focus_on(field);
+        input.end_frame();
+        input.end_frame();
+        input.end_frame();
+
+        assert!(input.has_focus(field), "focus must not decay on idle frames");
+    }
+
+    #[test]
+    fn typing_appends_and_backspace_removes() {
+        let mut input = Input::default();
+        let mut value = String::from("ab");
+
+        input.typed = "cd".into();
+        assert!(input.edit(&mut value));
+        assert_eq!(value, "abcd");
+
+        input.typed.clear();
+        input.keys.push(Key::Backspace);
+        assert!(input.edit(&mut value));
+        assert_eq!(value, "abc");
+    }
+
+    #[test]
+    fn control_characters_are_not_inserted() {
+        let mut input = Input::default();
+        let mut value = String::new();
+
+        input.typed = "a\u{7}\u{1b}b".into();
+        input.edit(&mut value);
+
+        assert_eq!(value, "ab", "bell and escape must not reach the field");
+    }
+
+    #[test]
+    fn backspace_on_an_empty_field_changes_nothing() {
+        let mut input = Input::default();
+        let mut value = String::new();
+
+        input.keys.push(Key::Backspace);
+        assert!(!input.edit(&mut value));
+        assert!(value.is_empty());
+    }
+
+    #[test]
+    fn the_caret_blinks_rather_than_staying_lit() {
+        let mut input = Input::default();
+
+        assert!(input.caret_visible(0.1), "a fresh caret must be visible");
+        input.caret = 1.2;
+        assert!(!input.caret_visible(0.0), "it must go dark part of the time");
+        input.caret = 0.0;
+        assert!(input.caret_visible(0.0));
     }
 
     #[test]

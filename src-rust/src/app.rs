@@ -55,6 +55,19 @@ pub struct Oracle {
     last_health: Instant,
     http: reqwest::Client,
 
+    /// The project being added or edited, if the form is open.
+    draft: Option<Project>,
+    /// True when the draft is new rather than an edit of an existing project.
+    draft_is_new: bool,
+
+    /// Text widths measured at the end of a frame and reused by the next one.
+    ///
+    /// Only the text engine knows how wide a string renders, and it is not reachable from
+    /// the layout pass. One frame of lag on a caret is invisible; guessing from a character
+    /// count is not.
+    measured: HashMap<String, f32>,
+    to_measure: Vec<String>,
+
     /// Candidates from the last folder scan, and which are ticked.
     candidates: Vec<crate::core::discovery::Candidate>,
     chosen: std::collections::HashSet<String>,
@@ -115,6 +128,7 @@ enum Screen {
     Projects,
     Settings,
     Scan,
+    Form,
 }
 
 impl Filter {
@@ -172,6 +186,10 @@ impl Default for Oracle {
             health: Arc::new(parking_lot::Mutex::new(Vec::new())),
             last_health: Instant::now() - Duration::from_secs(3600),
             http: crate::core::remote::client(),
+            draft: None,
+            draft_is_new: false,
+            measured: HashMap::new(),
+            to_measure: Vec::new(),
             candidates: Vec::new(),
             chosen: std::collections::HashSet::new(),
             scanning: false,
@@ -335,6 +353,12 @@ impl Oracle {
             }
             Screen::Scan => {
                 self.scan_screen(width, height, dt);
+                self.frame
+                    .rule(0.0, TITLEBAR, width, false, self.palette.line);
+                return;
+            }
+            Screen::Form => {
+                self.form_screen(width, height, dt);
                 self.frame
                     .rule(0.0, TITLEBAR, width, false, self.palette.line);
                 return;
@@ -534,28 +558,23 @@ impl Oracle {
 
         // Search field.
         let filters_width = 240.0;
-        let actions_width = 108.0;
+        let actions_width = 188.0;
         let search: Rect = [
             inner,
             row_y,
             (width - gap::LG * 2.0 - filters_width - actions_width - gap::SM * 2.0).max(120.0),
             34.0,
         ];
-        self.frame
-            .panel(search, GlassStyle::sunken(&palette), 1.0);
 
-        let label = if self.query.is_empty() {
-            "Search projects".to_string()
-        } else {
-            self.query.clone()
-        };
-        let colour = if self.query.is_empty() {
-            palette.muted
-        } else {
-            palette.ink
-        };
-        self.frame
-            .label(label, search[0] + gap::MD, search[1] + 9.0, text::BASE, colour);
+        let mut query = self.query.clone();
+        let query_width = self.width_of(&query);
+        if self
+            .ui(dt)
+            .field("search", search, &mut query, "Search projects", query_width)
+        {
+            self.query = query;
+            self.scroll = 0.0;
+        }
 
         // Filter segments.
         let mut fx = search[0] + search[2] + gap::SM;
@@ -625,6 +644,10 @@ impl Oracle {
             );
             (toggle_all, scan, add)
         };
+
+        if _add {
+            self.open_form(None);
+        }
 
         if toggle_all {
             // Start everything local that is idle, or stop everything that is not.
@@ -867,12 +890,19 @@ impl Oracle {
         let tabs_y = y + 68.0;
         let selected_tab = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
 
-        let (closed, picked) = {
+        let edit: Rect = [close[0] - 34.0, close[1], 30.0, 30.0];
+        let (closed, edit_clicked, picked) = {
             let mut ui = self.ui(dt);
             let closed = ui.icon_button("detail-close", close, "\u{2715}", false);
+            let edit_clicked = ui.icon_button("detail-edit", edit, "\u{270E}", false);
             let picked = ui.tabs("tab", inner, tabs_y, &Tab::LABELS, selected_tab);
-            (closed, picked)
+            (closed, edit_clicked, picked)
         };
+
+        if edit_clicked {
+            self.open_form(Some(&project));
+            return;
+        }
 
         if closed {
             self.selected = None;
@@ -1176,9 +1206,13 @@ impl ApplicationHandler for Oracle {
             .map(|monitor| {
                 let scale = monitor.scale_factor();
                 let size = monitor.size();
+                // The vertical margin is larger than the horizontal one because the taskbar
+                // takes a strip off the bottom that `monitor.size()` still counts. Without
+                // it the window's own footer — Save, Cancel — sits behind the taskbar and
+                // cannot be clicked.
                 (
-                    (size.width as f64 / scale - 120.0).min(1240.0).max(960.0),
-                    (size.height as f64 / scale - 120.0).min(820.0).max(600.0),
+                    (size.width as f64 / scale - 120.0).min(1240.0).max(900.0),
+                    (size.height as f64 / scale - 200.0).min(820.0).max(560.0),
                 )
             })
             .unwrap_or((1100.0, 740.0));
@@ -1291,21 +1325,24 @@ impl ApplicationHandler for Oracle {
                 match &event.logical_key {
                     WinitKey::Named(NamedKey::Escape) => {
                         self.input.keys.push(Key::Escape);
-                        // Back out one level at a time: screen, then selection.
-                        if self.screen != Screen::Projects {
+                        // Back out one level at a time: focus, then screen, then selection.
+                        if self.input.focus.is_some() {
+                            self.input.blur();
+                        } else if self.screen != Screen::Projects {
                             self.screen = Screen::Projects;
+                            self.draft = None;
                             self.scroll = 0.0;
                         } else if self.selected.is_some() {
                             self.selected = None;
                         }
                     }
                     WinitKey::Named(NamedKey::Backspace) => {
-                        self.query.pop();
+                        self.input.keys.push(Key::Backspace);
                     }
-                    WinitKey::Character(c) => {
-                        self.query.push_str(c.as_str());
-                    }
-                    WinitKey::Named(NamedKey::Space) => self.query.push(' '),
+                    WinitKey::Named(NamedKey::Enter) => self.input.keys.push(Key::Enter),
+                    WinitKey::Named(NamedKey::Tab) => self.input.keys.push(Key::Tab),
+                    WinitKey::Named(NamedKey::Space) => self.input.typed.push(' '),
+                    WinitKey::Character(c) => self.input.typed.push_str(c.as_str()),
                     _ => {}
                 }
                 self.needs_frame = true;
@@ -1329,6 +1366,20 @@ impl ApplicationHandler for Oracle {
                 let palette = self.palette;
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.render(&self.frame, &palette, elapsed);
+
+                    // Strings the layout pass asked about. Measured here because this is the
+                    // only place the text engine is reachable, and cached because shaping is
+                    // the expensive half of drawing text.
+                    for value in self.to_measure.drain(..) {
+                        // Shaped at the logical size, so the result is already in the units
+                        // the layout works in. Dividing by the scale here would shrink the
+                        // caret's travel by a third on a 150% display.
+                        let width = renderer.text.measure(&value, text::BASE, 400, false);
+                        self.measured.insert(value, width);
+                    }
+                    if self.measured.len() > 256 {
+                        self.measured.clear();
+                    }
                 }
 
                 // Another frame is needed only while something is still moving. The wash
@@ -2151,4 +2202,345 @@ fn reveal(path: &std::path::Path) {
 #[cfg(not(windows))]
 fn reveal(path: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+}
+
+impl Oracle {
+    /// Opens the form on a copy of a project, or on a blank one.
+    ///
+    /// A copy, so abandoning the form leaves the stored project untouched.
+    fn open_form(&mut self, project: Option<&Project>) {
+        self.draft_is_new = project.is_none();
+        self.draft = Some(match project {
+            Some(existing) => existing.clone(),
+            None => {
+                let mut fresh = Project::new(String::new());
+                fresh.local = Some(LocalTarget::new(std::path::PathBuf::new(), String::new()));
+                fresh
+            }
+        });
+        self.screen = Screen::Form;
+        self.input.blur();
+        self.scroll = 0.0;
+    }
+
+    /// The width a string renders at, from the previous frame's measurements.
+    ///
+    /// Queues the string for measuring if it has not been seen, so the caret lands correctly
+    /// from the second frame onwards.
+    fn width_of(&mut self, value: &str) -> f32 {
+        match self.measured.get(value) {
+            Some(width) => *width,
+            None => {
+                if !self.to_measure.iter().any(|q| q == value) {
+                    self.to_measure.push(value.to_string());
+                }
+                0.0
+            }
+        }
+    }
+
+    /// The add and edit form.
+    fn form_screen(&mut self, width: f32, height: f32, dt: f32) {
+        let palette = self.palette;
+        let Some(mut draft) = self.draft.clone() else {
+            self.screen = Screen::Projects;
+            return;
+        };
+
+        let inner = gap::XL;
+        let content = (width - gap::XL * 2.0).min(640.0);
+        let half = (content - gap::MD) * 0.5;
+
+        let title = if self.draft_is_new {
+            "Add a project".to_string()
+        } else {
+            format!("Edit {}", draft.name)
+        };
+        self.frame.text(
+            Run::new(title, inner, TITLEBAR + gap::XL, text::LG, palette.ink).weight(640),
+        );
+
+        // Pull every editable value out of the draft, so the borrow checker is not fighting
+        // a `Ui` that holds the frame while the draft is also borrowed.
+        let mut name = draft.name.clone();
+        let local = draft.local.clone().unwrap_or_else(|| {
+            LocalTarget::new(std::path::PathBuf::new(), String::new())
+        });
+        let mut root = local.root.to_string_lossy().to_string();
+        let mut command = local.command.clone();
+        let mut port = local.port.map(|p| p.to_string()).unwrap_or_default();
+        let mut open = local.open_url.clone().unwrap_or_default();
+        let mut health = draft
+            .remote
+            .as_ref()
+            .map(|r| r.url.clone())
+            .unwrap_or_default();
+
+        let widths = [
+            self.width_of(&name),
+            self.width_of(&root),
+            self.width_of(&command),
+            self.width_of(&port),
+            self.width_of(&open),
+            self.width_of(&health),
+        ];
+
+        let back: Rect = [width - 44.0 - gap::XL, TITLEBAR + gap::XL, 30.0, 30.0];
+        let mut y = TITLEBAR + 84.0;
+        let leave;
+        let mut changed = false;
+
+        {
+            let mut ui = self.ui(dt);
+            leave = ui.icon_button("form-close", back, "\u{2715}", false);
+
+            changed |= ui.labelled_field(
+                "name", inner, y, content, "Name", &mut name, "Project name", widths[0],
+            );
+            y += 62.0;
+
+            ui.heading(inner, y, "Runs locally");
+            y += 24.0;
+
+            changed |= ui.labelled_field(
+                "root",
+                inner,
+                y,
+                content,
+                "Folder",
+                &mut root,
+                "C:\\Users\\you\\projects\\app",
+                widths[1],
+            );
+            y += 62.0;
+
+            changed |= ui.labelled_field(
+                "command",
+                inner,
+                y,
+                content,
+                "Command",
+                &mut command,
+                "npm run dev",
+                widths[2],
+            );
+            y += 62.0;
+
+            changed |= ui.labelled_field(
+                "port", inner, y, half, "Port", &mut port, "3000", widths[3],
+            );
+            changed |= ui.labelled_field(
+                "open",
+                inner + half + gap::MD,
+                y,
+                half,
+                "Open URL",
+                &mut open,
+                "defaults to localhost",
+                widths[4],
+            );
+            y += 70.0;
+
+            ui.heading(inner, y, "Deployed elsewhere");
+            y += 24.0;
+
+            changed |= ui.labelled_field(
+                "health",
+                inner,
+                y,
+                content,
+                "Health check URL",
+                &mut health,
+                "https://app.example.com/health",
+                widths[5],
+            );
+            y += 70.0;
+        }
+
+        // Kind, as a segmented control rather than free text.
+        let kinds = [
+            ProjectKind::NextJs,
+            ProjectKind::Node,
+            ProjectKind::Rust,
+            ProjectKind::Python,
+            ProjectKind::Docker,
+            ProjectKind::Static,
+            ProjectKind::Other,
+        ];
+        let labels: Vec<&str> = kinds.iter().map(|k| k.label()).collect();
+        let current = kinds.iter().position(|k| *k == draft.kind).unwrap_or(6);
+
+        let picked = {
+            let mut ui = self.ui(dt);
+            ui.heading(inner, y, "Type");
+            ui.segmented("kind", [inner, y + 24.0, content, 32.0], &labels, current)
+        };
+        if let Some(index) = picked {
+            draft.kind = kinds[index];
+            changed = true;
+        }
+
+        // Footer.
+        let footer = height - 54.0;
+        self.frame
+            .rule(0.0, footer - gap::MD, width, false, palette.line);
+
+        let is_new = self.draft_is_new;
+        let (delete, cancel, save) = {
+            let mut ui = self.ui(dt);
+            let delete = if is_new {
+                false
+            } else {
+                ui.button("form-delete", [inner, footer, 90.0, 32.0], "Delete", Weight::Danger)
+            };
+            let cancel = ui.button(
+                "form-cancel",
+                [width - gap::XL - 200.0, footer, 90.0, 32.0],
+                "Cancel",
+                Weight::Secondary,
+            );
+            let save = ui.button(
+                "form-save",
+                [width - gap::XL - 100.0, footer, 100.0, 32.0],
+                "Save",
+                Weight::Primary,
+            );
+            (delete, cancel, save)
+        };
+
+        // Fold the edited strings back into the draft.
+        //
+        // Stored exactly as typed. Trimming here would delete the space the moment it is
+        // typed, so the next frame reseeds the field without it and the following word runs
+        // into the previous one — "cargo test" became "cargotest". Whitespace is cleaned up
+        // once, on save.
+        if changed {
+            draft.name = name;
+
+            draft.local = if root.is_empty() && command.is_empty() {
+                None
+            } else {
+                Some(LocalTarget {
+                    root: std::path::PathBuf::from(&root),
+                    command: command.clone(),
+                    env: local.env.clone(),
+                    port: port.trim().parse::<u16>().ok(),
+                    open_url: (!open.is_empty()).then(|| open.clone()),
+                    autostart_with_oracle: local.autostart_with_oracle,
+                })
+            };
+
+            draft.remote = (!health.is_empty()).then(|| RemoteTarget {
+                url: health.clone(),
+                check: RemoteCheck::default(),
+                interval_secs: draft
+                    .remote
+                    .as_ref()
+                    .map(|r| r.interval_secs)
+                    .unwrap_or(30),
+            });
+
+            self.draft = Some(draft.clone());
+        }
+
+        if delete {
+            let id = draft.id.clone();
+            self.delete_project(&id);
+            return;
+        }
+        if cancel || leave {
+            self.draft = None;
+            self.screen = Screen::Projects;
+            self.input.blur();
+            return;
+        }
+        if save {
+            self.save_draft(draft);
+        }
+    }
+
+    /// Commits the form.
+    ///
+    /// A project with no name is refused rather than saved as a blank row nobody can
+    /// identify; everything else is allowed through, because a command that does not work
+    /// yet is a normal state to save.
+    fn save_draft(&mut self, mut draft: Project) {
+        if draft.name.trim().is_empty() {
+            return;
+        }
+
+        // The one place whitespace is cleaned up, so editing never fights the user.
+        draft.name = draft.name.trim().to_string();
+
+        if let Some(local) = draft.local.as_mut() {
+            local.root = std::path::PathBuf::from(local.root.to_string_lossy().trim());
+            local.command = local.command.trim().to_string();
+            local.open_url = local
+                .open_url
+                .as_ref()
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty());
+        }
+        if let Some(remote) = draft.remote.as_mut() {
+            remote.url = remote.url.trim().to_string();
+        }
+        draft.remote = draft.remote.filter(|r| !r.url.is_empty());
+        draft.local = draft
+            .local
+            .filter(|l| !l.root.as_os_str().is_empty() || !l.command.is_empty());
+
+        match self.config.project_mut(&draft.id) {
+            Some(existing) => {
+                let order = existing.order;
+                *existing = draft.clone();
+                existing.order = order;
+            }
+            None => {
+                draft.order = self.config.projects.len() as i32;
+                self.config.projects.push(draft.clone());
+            }
+        }
+
+        if let Err(err) = config::save(&self.config) {
+            eprintln!("Oracle could not save the project: {err}");
+        }
+
+        self.draft = None;
+        self.screen = Screen::Projects;
+        self.selected = Some(draft.id);
+        self.input.blur();
+    }
+
+    /// Removes a project, stopping it first so nothing is orphaned.
+    fn delete_project(&mut self, project_id: &str) {
+        if matches!(
+            self.status_of(project_id),
+            ProjectStatus::Running | ProjectStatus::Starting
+        ) {
+            let runner = self.runner.clone();
+            let id = project_id.to_string();
+            self.runtime.spawn(async move {
+                let _ = runner.stop(&id).await;
+            });
+        }
+
+        self.config.projects.retain(|p| p.id != project_id);
+        self.config.normalise_order();
+        self.statuses.remove(project_id);
+        self.usage.remove(project_id);
+        self.git.remove(project_id);
+        self.remote.remove(project_id);
+
+        if self.selected.as_deref() == Some(project_id) {
+            self.selected = None;
+        }
+
+        if let Err(err) = config::save(&self.config) {
+            eprintln!("Oracle could not save after removing the project: {err}");
+        }
+
+        self.draft = None;
+        self.screen = Screen::Projects;
+        self.input.blur();
+    }
 }
