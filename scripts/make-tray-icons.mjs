@@ -1,10 +1,12 @@
-// Generates the tray icons from the source logo.
+// Generates every icon Oracle ships, from the source artwork.
 //
-// The source artwork sits on an opaque off-white ground, which would read as a white
-// tile in the Windows notification area. This strips that ground to alpha, trims the
-// result to the mark's bounding box, and emits the sizes the tray needs.
+// The artwork sits on an opaque off-white ground. Left as-is it reads as a white tile in
+// the taskbar and the notification area, and the mark itself ends up small inside its own
+// padding. This strips the ground to alpha, trims to the mark's bounding box, and re-lays
+// it out on a transparent square so the orange fills the tile.
 //
-// Run once after changing assets/logo.png:  node scripts/make-tray-icons.mjs
+// Run after changing assets/logo.png:
+//   node scripts/make-tray-icons.mjs && npx tauri icon assets/icon-source.png
 
 import sharp from "sharp";
 import { mkdirSync } from "node:fs";
@@ -47,45 +49,60 @@ async function stripGround() {
     .then((buf) => sharp(buf).trim({ threshold: 1 }).toBuffer());
 }
 
+/**
+ * Lays the trimmed mark on a transparent square.
+ *
+ * `inset` is the fraction of the tile the mark occupies. Small tray slots need a sliver of
+ * breathing room so neighbouring icons do not touch; an app icon should fill its tile, since
+ * Windows already draws it inside its own padding.
+ */
+async function square(mark, size, inset) {
+  const inner = Math.round(size * inset);
+
+  return sharp({
+    create: {
+      width: size,
+      height: size,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([
+      {
+        input: await sharp(mark)
+          .resize(inner, inner, {
+            fit: "contain",
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          })
+          .toBuffer(),
+        gravity: "center",
+      },
+    ])
+    .png()
+    .toBuffer();
+}
+
 async function main() {
   mkdirSync(outDir, { recursive: true });
   const mark = await stripGround();
 
-  // Padded square so the mark never touches the edge of its tray slot.
-  const square = async (size) => {
-    const inner = Math.round(size * 0.82);
-    return sharp({
-      create: {
-        width: size,
-        height: size,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 },
-      },
-    })
-      .composite([
-        {
-          input: await sharp(mark)
-            .resize(inner, inner, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-            .toBuffer(),
-          gravity: "center",
-        },
-      ])
-      .png()
-      .toBuffer();
-  };
+  // The source `tauri icon` regenerates the whole set from. Nearly edge to edge, and fully
+  // transparent, so no white tile survives anywhere.
+  await sharp(await square(mark, 1024, 0.96)).toFile(resolve(root, "assets/icon-source.png"));
 
   for (const size of [16, 20, 24, 32, 48, 64, 256]) {
-    await sharp(await square(size)).toFile(resolve(outDir, `tray-${size}.png`));
+    await sharp(await square(mark, size, 0.94)).toFile(resolve(outDir, `tray-${size}.png`));
   }
 
   // Tauri's tray API takes a single image; 32px covers the common DPI scalings.
-  await sharp(await square(32)).toFile(resolve(outDir, "tray.png"));
+  await sharp(await square(mark, 32, 0.94)).toFile(resolve(outDir, "tray.png"));
 
   // Transparent mark for use inside the UI.
-  await sharp(mark).resize(512, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+  await sharp(mark)
+    .resize(512, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .toFile(resolve(root, "assets/mark.png"));
 
-  console.log("tray icons written to", outDir);
+  console.log("icons written to", outDir);
 }
 
 main().catch((err) => {

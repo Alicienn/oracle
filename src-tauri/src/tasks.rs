@@ -34,7 +34,7 @@ pub struct RemoteTick {
 
 /// Samples every running project once a second.
 pub fn spawn_metrics_loop(app: AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut ticker = tokio::time::interval(SAMPLE_PERIOD);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -63,7 +63,7 @@ pub fn spawn_metrics_loop(app: AppHandle) {
 
 /// Checks every remote project on the configured interval.
 pub fn spawn_health_loop(app: AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         loop {
             let Some(state) = app.try_state::<Arc<AppState>>() else {
                 return;
@@ -121,14 +121,14 @@ pub fn spawn_health_loop(app: AppHandle) {
 
 /// Runs futures concurrently and collects the results.
 ///
-/// Hand-rolled rather than pulling in `futures` for one function: spawning onto the current
+/// Hand-rolled rather than pulling in `futures` for one function: spawning onto Tauri's
 /// runtime and joining the handles does the same job with a dependency Oracle already has.
 async fn futures_join_all<F, T>(futures: impl Iterator<Item = F>) -> Vec<T>
 where
     F: std::future::Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let handles: Vec<_> = futures.map(tokio::spawn).collect();
+    let handles: Vec<_> = futures.map(tauri::async_runtime::spawn).collect();
 
     let mut out = Vec::with_capacity(handles.len());
     for handle in handles {
@@ -143,7 +143,7 @@ where
 /// Attaches to any project whose port is already in use at startup, so a dev server the user
 /// launched from a terminal shows up as running instead of stopped.
 pub fn spawn_adoption_sweep(app: AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let Some(state) = app.try_state::<Arc<AppState>>() else {
             return;
         };
@@ -166,7 +166,7 @@ pub fn spawn_adoption_sweep(app: AppHandle) {
 
 /// Starts the projects flagged to come up with Oracle.
 pub fn spawn_project_autostart(app: AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let Some(state) = app.try_state::<Arc<AppState>>() else {
             return;
         };

@@ -21,10 +21,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .ok_or_else(|| tauri::Error::AssetNotFound("tray icon".into()))?;
+    // The application icon sits on the artwork's off-white ground, which reads as a white
+    // tile in the notification area. This one has that ground stripped to alpha.
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-32.png"))?;
 
     TrayIconBuilder::with_id("oracle")
         .icon(icon)

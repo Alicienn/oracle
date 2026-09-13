@@ -2,7 +2,7 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-09-13 — backend complete, 68 unit tests green
+Last updated: 2026-09-13 — complete. Installer built and verified running.
 
 ---
 
@@ -18,14 +18,14 @@ Last updated: 2026-09-13 — backend complete, 68 unit tests green
 | E5 | Resource monitoring | 5 | `[x]` |
 | E6 | Remote status (VPS) | 4 | `[x]` |
 | E7 | Git integration | 3 | `[x]` |
-| E8 | IPC surface | 3 | `[~]` |
-| E9 | Liquid glass design system | 7 | `[~]` |
-| E10 | Main window | 8 | `[ ]` |
-| E11 | Tray panel | 5 | `[ ]` |
-| E12 | Settings and autostart | 5 | `[ ]` |
-| E13 | Robustness and errors | 5 | `[~]` |
-| E14 | Tests | 4 | `[~]` |
-| E15 | Installer build | 5 | `[ ]` |
+| E8 | IPC surface | 3 | `[x]` |
+| E9 | Liquid glass design system | 7 | `[x]` |
+| E10 | Main window | 8 | `[x]` |
+| E11 | Tray panel | 5 | `[x]` |
+| E12 | Settings and autostart | 5 | `[x]` |
+| E13 | Robustness and errors | 5 | `[x]` |
+| E14 | Tests | 4 | `[x]` |
+| E15 | Installer build | 5 | `[x]` |
 
 ---
 
@@ -46,7 +46,7 @@ Last updated: 2026-09-13 — backend complete, 68 unit tests green
 
 - [x] **E1.S1** Copy the source logo to `assets/logo.png`
 - [x] **E1.S2** Generate the Tauri icon set (`.ico`, multi-size `.png`) via `tauri icon`
-- [x] **E1.S3** Dedicated tray icon (background stripped to alpha, legible at 16 px)
+- [x] **E1.S3** Icon set rebuilt from a transparent, edge-to-edge mark: no white tile in the taskbar or tray, and dedicated tray sizes
 - [x] **E1.S4** Reproduce the mark as inline SVG for the UI (splash, header, about)
 
 **Exit criterion**: icons present in `src-tauri/icons/`, mark rendered in the app.
@@ -141,7 +141,7 @@ Last updated: 2026-09-13 — backend complete, 68 unit tests green
 - [x] **E9.S2** SVG refraction filters (`feTurbulence` + `feDisplacementMap`), three intensities
 - [x] **E9.S3** `.glass` class: all three layers (refraction, illumination, highlight)
 - [x] **E9.S4** Cursor-tracking specular highlight (CSS variables driven by throttled JS)
-- [ ] **E9.S5** Primitives: button, field, card, pill, toggle, modal, toast
+- [x] **E9.S5** Primitives: button, field, card, pill, toggle, modal, toast
 - [x] **E9.S6** Performance fallback: frame rate probe, degraded mode, disable during drag
 - [x] **E9.S7** `prefers-reduced-motion` and opaque glass mode
 
@@ -151,14 +151,14 @@ Last updated: 2026-09-13 — backend complete, 68 unit tests green
 
 ## E10 — Main window
 
-- [ ] **E10.S1** Shell: custom title bar (drag, minimise, close), rail, column, panel
-- [ ] **E10.S2** Reactive store and render layer
-- [ ] **E10.S3** Project rail: icons, status dots, drag to reorder
-- [ ] **E10.S4** Project cards in list and grid, with status, kind, sparkline
-- [ ] **E10.S5** Detail panel: Overview / Logs / Metrics / Git / Settings tabs
-- [ ] **E10.S6** Log viewer (virtualised, auto-scroll, filter, copy)
-- [ ] **E10.S7** Add and edit project form with icon picker
-- [ ] **E10.S8** Global search and filters
+- [x] **E10.S1** Shell: custom title bar (drag, minimise, close), rail, column, panel
+- [x] **E10.S2** Reactive store and render layer
+- [x] **E10.S3** Project rail: icons, status dots, drag to reorder
+- [x] **E10.S4** Project cards in list and grid, with status, kind, sparkline
+- [x] **E10.S5** Detail panel: Overview / Logs / Metrics / Git / Settings tabs
+- [x] **E10.S6** Log viewer (virtualised, auto-scroll, filter, copy)
+- [x] **E10.S7** Add and edit project form with icon picker
+- [x] **E10.S8** Global search and filters
 
 **Exit criterion**: a full add → launch → observe → stop journey without touching disk by hand.
 
@@ -166,11 +166,11 @@ Last updated: 2026-09-13 — backend complete, 68 unit tests green
 
 ## E11 — Tray panel
 
-- [ ] **E11.S1** Tray icon, minimal menu (Open / Quit), left click toggles the panel
-- [ ] **E11.S2** Panel positioning near the tray, multi-monitor and DPI aware
-- [ ] **E11.S3** Contents: global gauges, search, compact list with play/stop
-- [ ] **E11.S4** Hide on blur, spring entrance animation
-- [ ] **E11.S5** Global shortcut `Ctrl+Shift+Space`
+- [x] **E11.S1** Tray icon, minimal menu (Open / Quit), left click toggles the panel
+- [x] **E11.S2** Panel positioning near the tray, multi-monitor and DPI aware
+- [x] **E11.S3** Contents: global gauges, search, compact list with play/stop
+- [x] **E11.S4** Hide on blur, spring entrance animation
+- [x] **E11.S5** Global shortcut `Ctrl+Shift+Space`
 
 **Exit criterion**: the panel opens in the right place on both primary and secondary monitors.
 
@@ -178,11 +178,11 @@ Last updated: 2026-09-13 — backend complete, 68 unit tests green
 
 ## E12 — Settings and autostart
 
-- [ ] **E12.S1** Full settings screen
-- [ ] **E12.S2** Windows autostart through the `Run` registry key
-- [ ] **E12.S3** Start hidden in the tray
-- [ ] **E12.S4** Auto-launch flagged projects
-- [ ] **E12.S5** Manage the list of root folders to scan
+- [x] **E12.S1** Full settings screen
+- [x] **E12.S2** Windows autostart through the `Run` registry key
+- [x] **E12.S3** Start hidden in the tray
+- [x] **E12.S4** Auto-launch flagged projects
+- [x] **E12.S5** Manage the list of root folders to scan
 
 **Exit criterion**: autostart verified after a real reboot.
 
@@ -191,8 +191,8 @@ Last updated: 2026-09-13 — backend complete, 68 unit tests green
 ## E13 — Robustness and errors
 
 - [x] **E13.S1** Typed `OracleError`, serialised to the frontend
-- [ ] **E13.S2** Toast system with expandable detail
-- [ ] **E13.S3** Failure isolation: one failing project does not affect the others
+- [x] **E13.S2** Toast system with expandable detail
+- [x] **E13.S3** Failure isolation: one failing project does not affect the others
 - [x] **E13.S4** Background tasks protected against panics
 - [x] **E13.S5** Single instance, clean shutdown of every child on exit
 
@@ -206,7 +206,7 @@ survives all three.
 - [x] **E14.S1** Unit tests: detection, command parsing, ring buffer, git parsing
 - [x] **E14.S2** Config tests: round-trip, defaults, corruption recovery
 - [x] **E14.S3** Process lifecycle integration test
-- [ ] **E14.S4** `cargo clippy` and `tsc --noEmit` clean
+- [x] **E14.S4** `cargo clippy` and `tsc --noEmit` clean
 
 **Exit criterion**: `cargo test` green, clippy clean.
 
@@ -214,10 +214,10 @@ survives all three.
 
 ## E15 — Installer build
 
-- [ ] **E15.S1** Bundle metadata: identifier, publisher, version, copyright
-- [ ] **E15.S2** Release profile: LTO, `codegen-units=1`, `panic=abort`, `strip`
-- [ ] **E15.S3** NSIS configuration: language, install mode, shortcuts
-- [ ] **E15.S4** `cargo tauri build` produces the installer
-- [ ] **E15.S5** Verification: install, launch, uninstall
+- [x] **E15.S1** Bundle metadata: identifier, publisher, version, copyright
+- [x] **E15.S2** Release profile: LTO, `codegen-units=1`, `panic=abort`, `strip`
+- [x] **E15.S3** NSIS configuration: language, install mode, shortcuts
+- [x] **E15.S4** `cargo tauri build` produces the installer
+- [x] **E15.S5** Verification: install, launch, uninstall
 
 **Exit criterion**: a working `Oracle_0.1.0_x64-setup.exe`.

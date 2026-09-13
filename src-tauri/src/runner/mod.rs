@@ -90,14 +90,28 @@ pub struct RunningInfo {
 pub struct ProcessManager {
     handles: Arc<RwLock<HashMap<String, ProcHandle>>>,
     sink: EventSink,
+    /// Where background tasks are spawned.
+    ///
+    /// Held explicitly rather than relying on `tokio::spawn`, which needs the *calling*
+    /// thread to be inside a runtime. Commands arrive on whatever thread the IPC layer
+    /// happens to use, so depending on that would be a latent panic.
+    runtime: tokio::runtime::Handle,
 }
 
 impl ProcessManager {
-    pub fn new(sink: EventSink) -> Self {
+    pub fn new(sink: EventSink, runtime: tokio::runtime::Handle) -> Self {
         Self {
             handles: Arc::new(RwLock::new(HashMap::new())),
             sink,
+            runtime,
         }
+    }
+
+    fn spawn<F>(&self, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.runtime.spawn(future);
     }
 
     /// Spawns the project's command and begins watching it.
@@ -306,7 +320,7 @@ impl ProcessManager {
     {
         let sink = self.sink.clone();
 
-        tokio::spawn(async move {
+        self.spawn(async move {
             let mut lines = BufReader::new(reader).lines();
 
             // Dev servers emit plenty of invalid UTF-8 (progress spinners, ANSI art); the
@@ -333,7 +347,7 @@ impl ProcessManager {
         let sink = self.sink.clone();
         let handles_ref = self.handles_ref();
 
-        tokio::spawn(async move {
+        self.spawn(async move {
             let outcome = child.wait().await;
             let was_asked = stop_requested.load(Ordering::SeqCst);
 
@@ -387,7 +401,7 @@ impl ProcessManager {
         let port = project.local.as_ref().and_then(|l| l.port);
         let sink = self.sink.clone();
 
-        tokio::spawn(async move {
+        self.spawn(async move {
             let Some(port) = port else {
                 // Without a declared port there is nothing to wait for: a process that is
                 // alive is as running as Oracle can tell.
@@ -566,7 +580,7 @@ mod tests {
     #[tokio::test]
     async fn starting_without_a_local_target_is_rejected() {
         let (sink, _) = recording_sink();
-        let manager = ProcessManager::new(sink);
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         let err = manager.start(&Project::new("Bare")).unwrap_err();
         assert_eq!(err.code(), "no_local_target");
@@ -575,7 +589,7 @@ mod tests {
     #[tokio::test]
     async fn an_empty_command_is_rejected() {
         let (sink, _) = recording_sink();
-        let manager = ProcessManager::new(sink);
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         let err = manager.start(&project_running("   ")).unwrap_err();
         assert_eq!(err.code(), "empty_command");
@@ -584,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn a_missing_working_directory_is_rejected() {
         let (sink, _) = recording_sink();
-        let manager = ProcessManager::new(sink);
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         let mut project = Project::new("Gone");
         project.local = Some(LocalTarget::new(
@@ -599,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn stopping_something_that_never_ran_is_rejected() {
         let (sink, _) = recording_sink();
-        let manager = ProcessManager::new(sink);
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         let err = manager.stop("nope").await.unwrap_err();
         assert_eq!(err.code(), "not_running");
@@ -608,7 +622,7 @@ mod tests {
     #[tokio::test]
     async fn a_short_command_runs_and_its_output_is_captured() {
         let (sink, recorded) = recording_sink();
-        let manager = ProcessManager::new(sink);
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         let project = project_running("echo oracle-marker");
         let pid = manager.start(&project).expect("should spawn");
@@ -629,7 +643,7 @@ mod tests {
     #[tokio::test]
     async fn starting_the_same_project_twice_is_rejected() {
         let (sink, _) = recording_sink();
-        let manager = ProcessManager::new(sink);
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         // A command that stays alive long enough for the second call to collide.
         #[cfg(windows)]
@@ -647,7 +661,7 @@ mod tests {
     #[tokio::test]
     async fn a_running_project_can_be_stopped() {
         let (sink, _) = recording_sink();
-        let manager = ProcessManager::new(sink);
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         #[cfg(windows)]
         let project = project_running("ping -n 30 127.0.0.1");

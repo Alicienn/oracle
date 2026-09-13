@@ -428,7 +428,10 @@ mod tests {
     use crate::runner::ProcessManager;
 
     fn state_with(projects: Vec<Project>) -> Arc<AppState> {
-        let runner = Arc::new(ProcessManager::new(Arc::new(|_| {})));
+        let runner = Arc::new(ProcessManager::new(
+            Arc::new(|_| {}),
+            tokio::runtime::Handle::current(),
+        ));
         let loaded = config::Loaded {
             config: Config {
                 projects,
@@ -440,8 +443,8 @@ mod tests {
         Arc::new(AppState::new(loaded, runner))
     }
 
-    #[test]
-    fn a_view_falls_back_to_the_accent_of_its_kind() {
+    #[tokio::test]
+    async fn a_view_falls_back_to_the_accent_of_its_kind() {
         let mut project = Project::new("Site");
         project.kind = ProjectKind::Rust;
         let state = state_with(vec![project.clone()]);
@@ -451,8 +454,8 @@ mod tests {
         assert_eq!(rendered.kind_label, "Rust");
     }
 
-    #[test]
-    fn an_explicit_accent_wins_over_the_kind() {
+    #[tokio::test]
+    async fn an_explicit_accent_wins_over_the_kind() {
         let mut project = Project::new("Site");
         project.kind = ProjectKind::Rust;
         project.accent = Some("#123456".into());
@@ -461,8 +464,8 @@ mod tests {
         assert_eq!(view(&state, &project).resolved_accent, "#123456");
     }
 
-    #[test]
-    fn a_project_that_never_ran_reads_as_stopped_and_unchecked() {
+    #[tokio::test]
+    async fn a_project_that_never_ran_reads_as_stopped_and_unchecked() {
         let project = Project::new("Idle");
         let state = state_with(vec![project.clone()]);
 
@@ -472,9 +475,12 @@ mod tests {
         assert!(rendered.pid.is_none());
     }
 
-    #[test]
-    fn warnings_are_delivered_once() {
-        let runner = Arc::new(ProcessManager::new(Arc::new(|_| {})));
+    #[tokio::test]
+    async fn warnings_are_delivered_once() {
+        let runner = Arc::new(ProcessManager::new(
+            Arc::new(|_| {}),
+            tokio::runtime::Handle::current(),
+        ));
         let loaded = config::Loaded {
             config: Config::default(),
             recovered_from: Some(PathBuf::from("C:/tmp/config.corrupt-1.json")),

@@ -23,6 +23,20 @@ pub const STATUS_EVENT: &str = "status:change";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Oracle owns its runtime rather than letting Tauri build one implicitly, so that the
+    // same handle can be handed to the process manager. Entering it here also means code
+    // running on the main thread — `setup`, and synchronous commands — is inside a runtime
+    // context.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("oracle")
+        .build()
+        .expect("Oracle could not start its async runtime");
+
+    tauri::async_runtime::set(runtime.handle().clone());
+    let runtime_handle = runtime.handle().clone();
+    let _runtime_guard = runtime.enter();
+
     tauri::Builder::default()
         // A second launch should surface the window that already exists rather than start
         // a rival instance fighting over the same config file and the same tray icon.
@@ -63,7 +77,7 @@ pub fn run() {
             commands::hide_panel,
             commands::quit_app,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
 
             // The runner reports through a closure so it never has to know about Tauri.
@@ -85,7 +99,7 @@ pub fn run() {
                 })
             };
 
-            let runner = Arc::new(ProcessManager::new(sink));
+            let runner = Arc::new(ProcessManager::new(sink, runtime_handle.clone()));
             let loaded = config::load();
             let start_hidden = loaded.config.settings.start_hidden || autostart::launched_hidden();
 
