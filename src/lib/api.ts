@@ -181,6 +181,39 @@ export interface ApiError {
   code: string;
   message: string;
   detail?: string | null;
+  /** Present only on the errors the UI can act on, such as a port conflict. */
+  data?: unknown;
+}
+
+/** The payload carried by a `port_in_use` error. */
+export interface PortConflict {
+  port: number;
+  /** Another Oracle project by name, or a description of the foreign process. */
+  holder: string;
+  /** The next free port, or null when the search found none. */
+  suggestion: number | null;
+}
+
+/**
+ * Reads the conflict payload off an error, if that is what it is.
+ *
+ * The message is written for a human; the parts have to arrive separately for the UI to
+ * offer a port rather than only report a collision.
+ */
+export function portConflict(error: unknown): PortConflict | null {
+  if (!isApiError(error) || error.code !== "port_in_use") return null;
+
+  const data = error.data;
+  if (typeof data !== "object" || data === null) return null;
+
+  const { port, holder, suggestion } = data as Record<string, unknown>;
+  if (typeof port !== "number" || typeof holder !== "string") return null;
+
+  return {
+    port,
+    holder,
+    suggestion: typeof suggestion === "number" ? suggestion : null,
+  };
 }
 
 /** Type guard, because a rejected invoke can also throw a plain string. */
@@ -212,9 +245,12 @@ export const api = {
   gitStatus: (projectId: string) =>
     invoke<GitStatus | null>("git_status", { projectId }),
 
-  start: (projectId: string) => invoke<number>("start_project", { projectId }),
+  /** `port` overrides the project's declared port for this run only. */
+  start: (projectId: string, port?: number) =>
+    invoke<number>("start_project", { projectId, port }),
   stop: (projectId: string) => invoke<void>("stop_project", { projectId }),
-  restart: (projectId: string) => invoke<number>("restart_project", { projectId }),
+  restart: (projectId: string, port?: number) =>
+    invoke<number>("restart_project", { projectId, port }),
 
   addProject: (project: Project) => invoke<ProjectView>("add_project", { project }),
   updateProject: (project: Project) =>

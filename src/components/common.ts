@@ -31,6 +31,11 @@ export function statusLabel(status: ProjectStatus): string {
   }
 }
 
+/** What a button says while its operation is in flight. */
+export function pendingLabel(kind: "start" | "stop", name: string): string {
+  return kind === "start" ? `Starting ${name}…` : `Stopping ${name}…`;
+}
+
 export function remoteLabel(status: RemoteStatus): string {
   switch (status.state) {
     case "up":
@@ -111,12 +116,60 @@ export function sparkline(values: number[], width = 58, height = 20): SVGElement
   return node;
 }
 
+/** Animation periods in components.css, needed here to compute the phase offsets. */
+const SPIN_MS = 900;
+const ARC_MS = 1400;
+const APPEAR_MS = 180;
+
+/**
+ * An indeterminate progress ring, sized to sit where an icon would.
+ *
+ * Built as an arc rather than a rotating icon so it reads as "working" instead of "this
+ * glyph is spinning": the dash pattern leaves a gap that travels round the circle, which is
+ * the convention every platform uses for an operation of unknown length.
+ *
+ * `since` is when the operation began. Because every region is rebuilt on each state change
+ * — once a second at minimum, from the metrics tick — a spinner node lives only a frame or
+ * two, and a fresh CSS animation would restart from zero each time: a ring that twitches
+ * instead of turning. Negative animation delays place each new node at the phase the
+ * animation would have reached, so the motion is continuous no matter how often the node
+ * behind it is replaced. The same trick skips the entrance animation on every node but the
+ * first, which would otherwise pulse once a second.
+ */
+export function spinner(since: number, size = 16): SVGElement {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const elapsed = Math.max(0, performance.now() - since);
+
+  node.setAttribute("class", "spinner");
+  node.setAttribute("viewBox", "0 0 16 16");
+  node.setAttribute("width", String(size));
+  node.setAttribute("height", String(size));
+  node.setAttribute("aria-hidden", "true");
+  node.innerHTML =
+    '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+
+  node.style.animationDelay = `-${elapsed % SPIN_MS}ms, -${Math.min(elapsed, APPEAR_MS)}ms`;
+
+  const arc = node.firstElementChild as SVGElement | null;
+  if (arc) arc.style.animationDelay = `-${elapsed % ARC_MS}ms`;
+
+  return node;
+}
+
 interface ButtonOptions {
   label?: string;
   title?: string;
   variant?: "primary" | "danger" | "ghost";
   iconName?: IconName;
   disabled?: boolean;
+  /**
+   * Shows a spinner in place of the icon and refuses clicks.
+   *
+   * The value is when the operation began, which the spinner needs to stay in phase across
+   * re-renders. Refusing clicks is part of the same option on purpose: a button that shows
+   * work in progress and still accepts a second click is worse than one that shows nothing.
+   */
+  pending?: number;
   onClick: (event: MouseEvent) => void;
 }
 
@@ -132,13 +185,16 @@ export function button(options: ButtonOptions): HTMLButtonElement {
       type: "button",
       title: options.title ?? options.label ?? "",
       "aria-label": options.title ?? options.label ?? "",
-      disabled: options.disabled,
+      disabled: options.disabled || options.pending !== undefined,
+      dataset: { pending: options.pending !== undefined ? "true" : undefined },
       onClick: (event: Event) => {
         event.stopPropagation();
         options.onClick(event as MouseEvent);
       },
     },
-    options.iconName && icon(icons[options.iconName]),
+    options.pending !== undefined
+      ? spinner(options.pending)
+      : options.iconName && icon(icons[options.iconName]),
     options.label,
   );
 

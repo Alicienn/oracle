@@ -15,7 +15,16 @@ import { installGlass } from "./lib/glass";
 import { connect, get, subscribe, visibleProjects, patch } from "./lib/store";
 import { open, toggle } from "./lib/actions";
 import { clearToasts } from "./lib/toast";
-import { button, iconTile, remoteDot, remoteLabel, sparkline, statusDot, statusLabel } from "./components/common";
+import {
+  button,
+  iconTile,
+  pendingLabel,
+  remoteDot,
+  remoteLabel,
+  sparkline,
+  statusDot,
+  statusLabel,
+} from "./components/common";
 
 const head = qs("#panel-head");
 const meters = qs("#panel-meters");
@@ -90,6 +99,7 @@ function renderSearch(): HTMLElement {
 function row(project: ProjectView): HTMLElement {
   const live = project.status === "running" || project.status === "starting";
   const usage = get().usage[project.id];
+  const pending = get().pending[project.id];
 
   const meta: (HTMLElement | string)[] = [];
 
@@ -129,7 +139,12 @@ function row(project: ProjectView): HTMLElement {
       ? button({
           iconName: live ? "stop" : "play",
           variant: "ghost",
-          title: live ? `Stop ${project.name}` : `Start ${project.name}`,
+          title: pending
+            ? pendingLabel(pending.kind, project.name)
+            : live
+              ? `Stop ${project.name}`
+              : `Start ${project.name}`,
+          pending: pending?.since,
           onClick: () => void toggle(project),
         })
       : project.resolvedUrl

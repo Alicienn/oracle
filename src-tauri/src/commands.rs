@@ -124,8 +124,14 @@ pub fn git_status(state: St, project_id: String) -> Result<Option<vcs::GitStatus
 // Project lifecycle
 // ---------------------------------------------------------------------------
 
+/// Starts a project.
+///
+/// `port` overrides the project's declared port for this run only — what the UI sends back
+/// after offering the user a free port. It is deliberately not persisted: a collision is
+/// usually a one-off, and silently rewriting the project's settings would be a surprise the
+/// next time it starts.
 #[tauri::command]
-pub fn start_project(state: St, project_id: String) -> Result<u32> {
+pub async fn start_project(state: St<'_>, project_id: String, port: Option<u16>) -> Result<u32> {
     let project = {
         let config = state.config.read();
         config
@@ -134,7 +140,7 @@ pub fn start_project(state: St, project_id: String) -> Result<u32> {
             .clone()
     };
 
-    state.runner.start(&project)
+    state.runner.start(&project, port).await
 }
 
 #[tauri::command]
@@ -143,7 +149,7 @@ pub async fn stop_project(state: St<'_>, project_id: String) -> Result<()> {
 }
 
 #[tauri::command]
-pub async fn restart_project(state: St<'_>, project_id: String) -> Result<u32> {
+pub async fn restart_project(state: St<'_>, project_id: String, port: Option<u16>) -> Result<u32> {
     // Ignore a stop failure: the project may simply not be running yet.
     let _ = state.runner.stop(&project_id).await;
 
@@ -155,7 +161,7 @@ pub async fn restart_project(state: St<'_>, project_id: String) -> Result<u32> {
             .clone()
     };
 
-    state.runner.start(&project)
+    state.runner.start(&project, port).await
 }
 
 // ---------------------------------------------------------------------------

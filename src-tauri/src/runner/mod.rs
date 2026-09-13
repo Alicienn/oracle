@@ -63,6 +63,10 @@ pub type EventSink = Arc<dyn Fn(RunnerEvent) + Send + Sync>;
 
 struct ProcHandle {
     pid: u32,
+    /// The project's display name, so a port conflict can name the culprit.
+    name: String,
+    /// The port this run is expected to hold, after any override.
+    port: Option<u16>,
     started_at: i64,
     logs: Arc<Mutex<LogRing>>,
     status: Arc<RwLock<ProjectStatus>>,
@@ -118,7 +122,10 @@ impl ProcessManager {
     ///
     /// Returns as soon as the child process exists. The project reaches `Running` only once
     /// its port answers, which happens on a background task.
-    pub fn start(&self, project: &Project) -> Result<u32> {
+    ///
+    /// `port_override` replaces the project's declared port for this run only: it is handed
+    /// to the child through the environment and never written back to the configuration.
+    pub async fn start(&self, project: &Project, port_override: Option<u16>) -> Result<u32> {
         let local = project
             .local
             .as_ref()
@@ -137,7 +144,20 @@ impl ProcessManager {
             return Err(OracleError::MissingWorkingDir(local.root.clone()));
         }
 
-        let mut child = build_command(command, project)?
+        // The port is settled before anything is spawned. Discovering the collision from
+        // the child's own output would mean a process that appears to start and then dies,
+        // which is precisely the experience this check exists to replace.
+        let port = port_override.or(local.port);
+        if let Some(port) = port {
+            self.ensure_port_free(port, &project.id).await?;
+        }
+
+        let command = match port_override {
+            Some(port) => apply_port_override(command, port),
+            None => command.to_string(),
+        };
+
+        let mut child = build_command(&command, project, port_override)?
             .spawn()
             .map_err(|err| OracleError::SpawnFailed(err.to_string()))?;
 
@@ -151,6 +171,15 @@ impl ProcessManager {
 
         self.append_log(&ring, &project.id, Stream::System, format!("$ {command}"));
 
+        if let Some(port) = port_override {
+            self.append_log(
+                &ring,
+                &project.id,
+                Stream::System,
+                format!("Started on port {port} for this run only (PORT={port})."),
+            );
+        }
+
         // Pipe both streams into the ring buffer.
         if let Some(stdout) = child.stdout.take() {
             self.pump(stdout, project.id.clone(), Stream::Stdout, ring.clone());
@@ -163,6 +192,8 @@ impl ProcessManager {
             project.id.clone(),
             ProcHandle {
                 pid,
+                name: project.name.clone(),
+                port,
                 started_at: chrono::Utc::now().timestamp_millis(),
                 logs: ring.clone(),
                 status: status.clone(),
@@ -173,7 +204,7 @@ impl ProcessManager {
 
         self.emit_status(&project.id, ProjectStatus::Starting);
         self.watch_exit(child, project.id.clone(), ring.clone(), status.clone(), stop_requested);
-        self.watch_readiness(project, ring, status);
+        self.watch_readiness(&project.id, port, ring, status);
 
         Ok(pid)
     }
@@ -203,6 +234,8 @@ impl ProcessManager {
             project.id.clone(),
             ProcHandle {
                 pid,
+                name: project.name.clone(),
+                port: Some(port),
                 started_at: chrono::Utc::now().timestamp_millis(),
                 logs: ring,
                 status: Arc::new(RwLock::new(ProjectStatus::Running)),
@@ -390,15 +423,51 @@ impl ProcessManager {
         });
     }
 
+    /// Refuses a port that something else already holds.
+    ///
+    /// Another Oracle project is checked first: it gives a message the user can act on
+    /// ("Promethee has it") rather than a bare PID, and it catches the collision even during
+    /// the window where the other project has spawned but not yet bound its port.
+    async fn ensure_port_free(&self, port: u16, project_id: &str) -> Result<()> {
+        let conflict = self.handles.read().iter().find_map(|(id, handle)| {
+            (id != project_id && handle.port == Some(port)).then(|| handle.name.clone())
+        });
+
+        if let Some(holder) = conflict {
+            return Err(OracleError::PortInUse {
+                port,
+                holder,
+                suggestion: probe::find_free_port(port),
+            });
+        }
+
+        if !probe::port_is_taken(port) {
+            return Ok(());
+        }
+
+        // Something outside Oracle holds it. A PID is the most we can say, and even that is
+        // best effort — the listener may be in a container or owned by another user.
+        let holder = match probe::pid_on_port(port).await {
+            Some(pid) => format!("another process (pid {pid})"),
+            None => "another process".to_string(),
+        };
+
+        Err(OracleError::PortInUse {
+            port,
+            holder,
+            suggestion: probe::find_free_port(port),
+        })
+    }
+
     /// Moves the project from `Starting` to `Running` once its port answers.
     fn watch_readiness(
         &self,
-        project: &Project,
+        project_id: &str,
+        port: Option<u16>,
         ring: Arc<Mutex<LogRing>>,
         status: Arc<RwLock<ProjectStatus>>,
     ) {
-        let project_id = project.id.clone();
-        let port = project.local.as_ref().and_then(|l| l.port);
+        let project_id = project_id.to_string();
         let sink = self.sink.clone();
 
         self.spawn(async move {
@@ -489,7 +558,54 @@ impl ProcessManager {
 /// write things like `npm run dev` but also `npx prisma migrate && npm run dev`, and the
 /// shell already knows how to handle quoting, chaining, and redirection. Re-implementing
 /// that would add a parser and a class of bugs for no benefit.
-fn build_command(command: &str, project: &Project) -> Result<tokio::process::Command> {
+/// Rewrites a command line so a one-off port override actually reaches the server.
+///
+/// Most dev servers read `PORT` from the environment, which `build_command` sets. Vite and
+/// `serve` do not: they take `--port` and ignore the variable entirely, so for those the
+/// flag has to be appended.
+///
+/// A command that already names a port is left exactly as written. The user was explicit,
+/// and a second `--port` would either be rejected or silently win over the first.
+///
+/// The honest limitation: a Vite project launched as `npm run dev` is indistinguishable from
+/// any other npm script, so the flag cannot be added and the override may not take. The
+/// conflict is still reported rather than hidden, which is the part that matters.
+fn apply_port_override(command: &str, port: u16) -> String {
+    const TAKES_A_FLAG: [&str; 2] = ["vite", "serve"];
+
+    if names_a_port(command) {
+        return command.to_string();
+    }
+
+    let mentions = |name: &str| {
+        command
+            .split(|c: char| c.is_whitespace() || c == '/' || c == '\\')
+            .any(|token| token.eq_ignore_ascii_case(name))
+    };
+
+    if TAKES_A_FLAG.iter().any(|name| mentions(name)) {
+        format!("{command} --port {port}")
+    } else {
+        command.to_string()
+    }
+}
+
+/// True when the command already sets a port itself, in any of the spellings in use.
+fn names_a_port(command: &str) -> bool {
+    command.split_whitespace().any(|token| {
+        token == "--port"
+            || token == "-p"
+            || token == "-l"
+            || token.starts_with("--port=")
+            || token.starts_with("PORT=")
+    })
+}
+
+fn build_command(
+    command: &str,
+    project: &Project,
+    port_override: Option<u16>,
+) -> Result<tokio::process::Command> {
     let local = project
         .local
         .as_ref()
@@ -516,6 +632,12 @@ fn build_command(command: &str, project: &Project) -> Result<tokio::process::Com
     std_command.current_dir(&local.root);
     for (key, value) in &local.env {
         std_command.env(key, value);
+    }
+
+    // Applied after the project's own environment so the override wins for this run. The
+    // stored configuration is untouched: the next ordinary start goes back to its own port.
+    if let Some(port) = port_override {
+        std_command.env("PORT", port.to_string());
     }
 
     let mut command = tokio::process::Command::from(std_command);
@@ -571,6 +693,12 @@ mod tests {
         (sink, recorded)
     }
 
+    /// A command that outlives the call that spawned it without outliving the test.
+    #[cfg(windows)]
+    const SHORT_LIVED: &str = "ping -n 3 127.0.0.1";
+    #[cfg(not(windows))]
+    const SHORT_LIVED: &str = "sleep 2";
+
     fn project_running(command: &str) -> Project {
         let mut project = Project::new("Test");
         project.local = Some(LocalTarget::new(std::env::temp_dir(), command));
@@ -582,7 +710,7 @@ mod tests {
         let (sink, _) = recording_sink();
         let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
-        let err = manager.start(&Project::new("Bare")).unwrap_err();
+        let err = manager.start(&Project::new("Bare"), None).await.unwrap_err();
         assert_eq!(err.code(), "no_local_target");
     }
 
@@ -591,7 +719,7 @@ mod tests {
         let (sink, _) = recording_sink();
         let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
-        let err = manager.start(&project_running("   ")).unwrap_err();
+        let err = manager.start(&project_running("   "), None).await.unwrap_err();
         assert_eq!(err.code(), "empty_command");
     }
 
@@ -606,7 +734,7 @@ mod tests {
             "echo hi",
         ));
 
-        let err = manager.start(&project).unwrap_err();
+        let err = manager.start(&project, None).await.unwrap_err();
         assert_eq!(err.code(), "missing_working_dir");
     }
 
@@ -625,7 +753,7 @@ mod tests {
         let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
 
         let project = project_running("echo oracle-marker");
-        let pid = manager.start(&project).expect("should spawn");
+        let pid = manager.start(&project, None).await.expect("should spawn");
         assert!(pid > 0);
 
         // The process is tiny; give it room to run and be reaped.
@@ -651,11 +779,121 @@ mod tests {
         #[cfg(not(windows))]
         let project = project_running("sleep 6");
 
-        manager.start(&project).expect("first start should work");
-        let err = manager.start(&project).unwrap_err();
+        manager.start(&project, None).await.expect("first start should work");
+        let err = manager.start(&project, None).await.unwrap_err();
 
         assert_eq!(err.code(), "already_running");
         manager.stop(&project.id).await.ok();
+    }
+
+    #[test]
+    fn an_override_adds_the_flag_only_where_the_environment_is_ignored() {
+        // Vite and serve read the flag, not PORT.
+        assert_eq!(apply_port_override("npx vite", 3001), "npx vite --port 3001");
+        assert_eq!(apply_port_override("npx serve .", 8081), "npx serve . --port 8081");
+
+        // Everything else is left alone: PORT in the environment already covers it, and
+        // appending a flag a program does not know is how a start turns into a usage error.
+        assert_eq!(apply_port_override("npm run dev", 3001), "npm run dev");
+        assert_eq!(apply_port_override("cargo run", 3001), "cargo run");
+    }
+
+    #[test]
+    fn an_explicit_port_in_the_command_is_never_rewritten() {
+        for command in [
+            "npx vite --port 4000",
+            "npx vite --port=4000",
+            "npx serve -l 4000",
+            "npx serve -p 4000",
+            "PORT=4000 npm start",
+        ] {
+            assert_eq!(apply_port_override(command, 3001), command);
+        }
+    }
+
+    #[test]
+    fn the_flag_survives_a_path_qualified_binary() {
+        assert_eq!(
+            apply_port_override("./node_modules/.bin/vite", 3001),
+            "./node_modules/.bin/vite --port 3001"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_port_held_by_another_process_blocks_the_start() {
+        let (sink, _) = recording_sink();
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
+
+        // Hold a port the way a foreign dev server would.
+        let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = squatter.local_addr().unwrap().port();
+
+        let mut project = project_running("echo never-runs");
+        project.local.as_mut().unwrap().port = Some(port);
+
+        let err = manager.start(&project, None).await.unwrap_err();
+        assert_eq!(err.code(), "port_in_use");
+
+        // The error has to carry a way out, not just a complaint.
+        let wire = serde_json::to_value(&err).unwrap();
+        assert_eq!(wire["data"]["port"], port);
+        assert!(wire["data"]["suggestion"].as_u64().is_some());
+        assert!(!manager.is_running(&project.id));
+    }
+
+    #[tokio::test]
+    async fn two_projects_cannot_hold_the_same_port() {
+        let (sink, _) = recording_sink();
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
+
+        // A free port, declared by both projects. The first start claims it.
+        let port = probe::find_free_port(41000).expect("a free port should exist");
+
+        // Long enough to still hold a handle for the second start, short enough to reap
+        // itself when the test ends. A long-lived child plus the taskkill to stop it costs
+        // enough wall-clock to starve the timing-sensitive tests running alongside.
+        let mut first = project_running(SHORT_LIVED);
+        first.name = "First".into();
+        first.local.as_mut().unwrap().port = Some(port);
+
+        let mut second = project_running(SHORT_LIVED);
+        second.name = "Second".into();
+        second.local.as_mut().unwrap().port = Some(port);
+
+        manager.start(&first, None).await.expect("the first should start");
+
+        let err = manager.start(&second, None).await.unwrap_err();
+        assert_eq!(err.code(), "port_in_use");
+        // Naming the project is the whole point of checking Oracle's own handles first: the
+        // command has not bound the port yet, so a probe alone would see it as free.
+        assert!(err.to_string().contains("First"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn an_override_starts_a_project_whose_port_is_taken() {
+        let (sink, _) = recording_sink();
+        let manager = ProcessManager::new(sink, tokio::runtime::Handle::current());
+
+        // Hold the declared port with a bare socket rather than a second project: this test
+        // is about the override being honoured, not about who the squatter is.
+        let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = squatter.local_addr().unwrap().port();
+        let spare = probe::find_free_port(taken).expect("a free port should exist");
+
+        let mut project = project_running(SHORT_LIVED);
+        project.local.as_mut().unwrap().port = Some(taken);
+
+        // Without the override this is the rejection the previous test asserts.
+        assert_eq!(
+            manager.start(&project, None).await.unwrap_err().code(),
+            "port_in_use"
+        );
+
+        manager
+            .start(&project, Some(spare))
+            .await
+            .expect("the override should clear the conflict");
+        assert!(manager.is_running(&project.id));
     }
 
     #[tokio::test]
@@ -668,7 +906,7 @@ mod tests {
         #[cfg(not(windows))]
         let project = project_running("sleep 30");
 
-        manager.start(&project).expect("should spawn");
+        manager.start(&project, None).await.expect("should spawn");
         assert!(manager.is_running(&project.id));
 
         manager.stop(&project.id).await.expect("should stop");

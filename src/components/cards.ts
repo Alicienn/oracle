@@ -6,7 +6,16 @@ import { bytes, percent, shortPath } from "../lib/format";
 import { brandMark } from "../lib/icons";
 import { open, toggle } from "../lib/actions";
 import { get, patch } from "../lib/store";
-import { button, emptyState, iconTile, remoteDot, remoteLabel, sparkline, statusDot } from "./common";
+import {
+  button,
+  emptyState,
+  iconTile,
+  pendingLabel,
+  remoteDot,
+  remoteLabel,
+  sparkline,
+  statusDot,
+} from "./common";
 
 export function renderList(
   host: HTMLElement,
@@ -50,6 +59,7 @@ export function renderList(
 function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
   const live = project.status === "running" || project.status === "starting";
   const selected = project.id === get().selectedId;
+  const pending = get().pending[project.id];
 
   const meta: (HTMLElement | string)[] = [h("span", { class: "tag" }, project.kindLabel)];
 
@@ -105,7 +115,12 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
         ? button({
             iconName: live ? "stop" : "play",
             variant: live ? undefined : "primary",
-            title: live ? `Stop ${project.name}` : `Start ${project.name}`,
+            title: pending
+              ? pendingLabel(pending.kind, project.name)
+              : live
+                ? `Stop ${project.name}`
+                : `Start ${project.name}`,
+            pending: pending?.since,
             onClick: () => void toggle(project),
           })
         : null,

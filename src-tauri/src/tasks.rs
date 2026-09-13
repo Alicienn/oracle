@@ -194,8 +194,10 @@ pub fn spawn_project_autostart(app: AppHandle) {
             if state.runner.is_running(&project.id) {
                 continue;
             }
-            // One project failing to start must not stop the others.
-            let _ = state.runner.start(&project);
+            // One project failing to start must not stop the others — including a project
+            // whose port a previous session left occupied, which now fails loudly here
+            // rather than dying inside the child process a second later.
+            let _ = state.runner.start(&project, None).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
     });

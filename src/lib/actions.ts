@@ -5,12 +5,27 @@
  * refresh that belongs with it, so no component has to remember that sequence.
  */
 
-import { api, type Project, type ProjectView } from "./api";
-import { get, patchProject, refreshProjects, reportError } from "./store";
+import { api, portConflict, type Project, type ProjectView } from "./api";
+import {
+  clearPending,
+  get,
+  patchProject,
+  pendingFor,
+  refreshProjects,
+  reportError,
+  setPending,
+} from "./store";
+import { askAboutPort } from "../components/portConflict";
 import { toast } from "./toast";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-export async function start(project: ProjectView): Promise<void> {
+/**
+ * Starts a project.
+ *
+ * `port` is set only when the user has accepted an alternative after a collision; it
+ * applies to this run and is never written back to the project.
+ */
+export async function start(project: ProjectView, port?: number): Promise<void> {
   if (!project.local) {
     toast({
       tone: "info",
@@ -20,38 +35,71 @@ export async function start(project: ProjectView): Promise<void> {
     return;
   }
 
-  // Optimistic: the spinner should appear on the click, not on the round trip.
+  // Optimistic on both counts: the spinner should appear on the click, not on the round
+  // trip, and the status dot should not claim the project is stopped while it boots.
+  setPending(project.id, "start");
   patchProject(project.id, { status: "starting" });
 
   try {
-    await api.start(project.id);
+    await api.start(project.id, port);
   } catch (error) {
+    clearPending(project.id);
     patchProject(project.id, { status: "stopped" });
+
+    // A port collision is the one failure with an obvious next move, so it gets a decision
+    // rather than a toast the user can only dismiss.
+    const conflict = portConflict(error);
+    if (conflict) {
+      const chosen = await askAboutPort(project, conflict);
+      if (chosen !== null) await start(project, chosen);
+      return;
+    }
+
     reportError(`Could not start ${project.name}`, error);
   }
 }
 
 export async function stop(project: ProjectView): Promise<void> {
+  setPending(project.id, "stop");
+
   try {
     await api.stop(project.id);
     patchProject(project.id, { status: "stopped", pid: null });
   } catch (error) {
     reportError(`Could not stop ${project.name}`, error);
+  } finally {
+    // The status event normally clears this; clearing it here too covers a stop that
+    // failed, where no event is coming.
+    clearPending(project.id);
   }
 }
 
 export async function restart(project: ProjectView): Promise<void> {
+  setPending(project.id, "start");
   patchProject(project.id, { status: "starting" });
 
   try {
     await api.restart(project.id);
   } catch (error) {
+    clearPending(project.id);
     patchProject(project.id, { status: "stopped" });
+
+    const conflict = portConflict(error);
+    if (conflict) {
+      const chosen = await askAboutPort(project, conflict);
+      if (chosen !== null) await start(project, chosen);
+      return;
+    }
+
     reportError(`Could not restart ${project.name}`, error);
   }
 }
 
 export async function toggle(project: ProjectView): Promise<void> {
+  // A second click while the first is unanswered would either start a project twice or
+  // stop one mid-stop. The button renders disabled; this guards the keyboard path too.
+  if (pendingFor(project.id)) return;
+
   const live = project.status === "running" || project.status === "starting";
   return live ? stop(project) : start(project);
 }

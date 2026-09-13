@@ -105,6 +105,7 @@ export function renderDetail(host: HTMLElement, project: ProjectView | null): vo
 
 function overviewPane(project: ProjectView, live: boolean): HTMLElement {
   const rows: HTMLElement[] = [];
+  const pending = get().pending[project.id];
 
   const row = (label: string, value: HTMLElement | string) => {
     rows.push(h("dt", null, label));
@@ -148,14 +149,27 @@ function overviewPane(project: ProjectView, live: boolean): HTMLElement {
     { style: { display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "24px" } },
     project.local
       ? button({
-          label: live ? "Stop" : "Start",
+          label: pending
+            ? pending.kind === "start"
+              ? "Starting…"
+              : "Stopping…"
+            : live
+              ? "Stop"
+              : "Start",
           iconName: live ? "stop" : "play",
           variant: live ? undefined : "primary",
+          pending: pending?.since,
           onClick: () => void toggle(project),
         })
       : null,
     project.local && live
-      ? button({ label: "Restart", iconName: "restart", onClick: () => void restart(project) })
+      ? button({
+          label: "Restart",
+          iconName: "restart",
+          // Restarting while a start or stop is still in flight would race it.
+          disabled: pending !== undefined,
+          onClick: () => void restart(project),
+        })
       : null,
     project.resolvedUrl
       ? button({ label: "Open", iconName: "external", onClick: () => void open(project) })

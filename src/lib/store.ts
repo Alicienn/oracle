@@ -23,6 +23,44 @@ import { toast } from "./toast";
 export type Filter = "all" | "local" | "remote" | "running";
 export type Tab = "overview" | "logs" | "metrics" | "git";
 
+/** An operation the user asked for that the backend has not yet answered. */
+export type Pending = "start" | "stop";
+
+/**
+ * A pending operation and when it began.
+ *
+ * The timestamp is not decoration. Every region is rebuilt from scratch on each state
+ * change — including the metrics tick, once a second — so a spinner node only ever lives
+ * for a frame or two. Its CSS animation would restart with each new node and visibly
+ * stutter; knowing when the operation started lets the spinner offset its animation and
+ * appear continuous across every rebuild.
+ */
+export interface PendingOp {
+  kind: Pending;
+  /** `performance.now()` at the moment the request was made. */
+  since: number;
+}
+
+/**
+ * How long a pending operation is allowed to sit unanswered.
+ *
+ * The backend resolves a start within `READY_TIMEOUT` (60s) and a stop within
+ * `GRACEFUL_STOP` (5s), so reaching this guard means an event was lost rather than slow. A
+ * spinner that never stops is worse than one that gives up.
+ */
+const PENDING_GUARD_MS = 90_000;
+
+/**
+ * Log lines held per project, and how many projects keep a buffer at all.
+ *
+ * The backend's ring is the archive — `api.logs` re-reads it whenever a project is selected
+ * — so the frontend only needs enough to render the pane and follow the tail. Keeping 1000
+ * lines for every project ever opened, for the life of the window, cost tens of megabytes
+ * of strings that nothing was going to read again.
+ */
+const LOG_LIMIT = 500;
+const LOG_PROJECTS = 3;
+
 export interface State {
   projects: ProjectView[];
   settings: Settings;
@@ -32,6 +70,14 @@ export interface State {
   /** Buffered log lines per project id. */
   logs: Record<string, LogLine[]>;
   git: Record<string, GitStatus | null>;
+  /**
+   * In-flight start/stop requests, per project id.
+   *
+   * Owned by the UI rather than derived from `status`: the backend's `starting` covers a
+   * project that is genuinely booting, which is not the same question as whether the button
+   * the user just pressed has been answered.
+   */
+  pending: Record<string, PendingOp>;
   selectedId: string | null;
   tab: Tab;
   filter: Filter;
@@ -61,6 +107,7 @@ const initial: State = {
   usage: {},
   logs: {},
   git: {},
+  pending: {},
   selectedId: null,
   tab: "overview",
   filter: "all",
@@ -87,6 +134,11 @@ export function subscribe(listener: Listener): () => void {
 export function patch(changes: Partial<State>): void {
   state = { ...state, ...changes };
 
+  // Log eviction hangs off selection because selection is what decides which buffers are
+  // still worth holding. Doing it here rather than in each component means no caller can
+  // change the selection and skip it.
+  if ("selectedId" in changes) state = evictStaleLogs(state);
+
   if (scheduled) return;
   scheduled = true;
 
@@ -96,6 +148,33 @@ export function patch(changes: Partial<State>): void {
   });
 }
 
+/**
+ * The projects whose logs are worth keeping, most recently selected first.
+ *
+ * Held outside the state because it is bookkeeping, not something any component renders.
+ */
+const recentlyViewed: string[] = [];
+
+/** Drops log buffers for every project outside the recently-viewed window. */
+function evictStaleLogs(next: State): State {
+  const current = next.selectedId;
+
+  if (current) {
+    const existing = recentlyViewed.indexOf(current);
+    if (existing !== -1) recentlyViewed.splice(existing, 1);
+    recentlyViewed.unshift(current);
+    recentlyViewed.length = Math.min(recentlyViewed.length, LOG_PROJECTS);
+  }
+
+  const stale = Object.keys(next.logs).filter((id) => !recentlyViewed.includes(id));
+  if (stale.length === 0) return next;
+
+  const logs = { ...next.logs };
+  for (const id of stale) delete logs[id];
+
+  return { ...next, logs };
+}
+
 /** Replaces one project in place, leaving the rest of the array identity alone. */
 export function patchProject(id: string, changes: Partial<ProjectView>): void {
   patch({
@@ -103,6 +182,50 @@ export function patchProject(id: string, changes: Partial<ProjectView>): void {
       project.id === id ? { ...project, ...changes } : project,
     ),
   });
+}
+
+/**
+ * Marks an operation as in flight and arms the guard that clears it.
+ *
+ * The timer is cancelled by `clearPending`, so a normal completion never leaves one
+ * pending: the only path that reaches the guard is a status event that never arrived.
+ */
+export function setPending(projectId: string, kind: Pending): void {
+  clearGuard(projectId);
+  guards.set(
+    projectId,
+    window.setTimeout(() => {
+      guards.delete(projectId);
+      clearPending(projectId);
+    }, PENDING_GUARD_MS),
+  );
+
+  patch({
+    pending: { ...state.pending, [projectId]: { kind, since: performance.now() } },
+  });
+}
+
+export function clearPending(projectId: string): void {
+  clearGuard(projectId);
+  if (!(projectId in state.pending)) return;
+
+  const next = { ...state.pending };
+  delete next[projectId];
+  patch({ pending: next });
+}
+
+export function pendingFor(projectId: string): PendingOp | undefined {
+  return state.pending[projectId];
+}
+
+const guards = new Map<string, number>();
+
+function clearGuard(projectId: string): void {
+  const timer = guards.get(projectId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    guards.delete(projectId);
+  }
 }
 
 export function selected(): ProjectView | null {
@@ -197,12 +320,22 @@ export async function connect(): Promise<void> {
 
   await events.status((projectId: string, status: ProjectStatus) => {
     patchProject(projectId, { status });
+
+    // Every status the backend emits is an answer to whatever was asked of the project, so
+    // any one of them ends the wait. `starting` is the exception: it is the backend echoing
+    // the request, not resolving it.
+    if (status !== "starting") clearPending(projectId);
   });
 
   await events.log((projectId: string, line: LogLine) => {
+    // A project nobody has looked at recently gets no buffer. Its output is not lost — the
+    // backend ring holds it, and `loadLogs` reads the whole thing back the moment the
+    // project is selected — so buffering it here would only be paying to duplicate it.
+    if (!recentlyViewed.includes(projectId)) return;
+
     const existing = state.logs[projectId] ?? [];
-    // Mirror the backend's cap so a long-lived session cannot grow without bound.
-    const next = existing.length >= 1000 ? [...existing.slice(1), line] : [...existing, line];
+    const next =
+      existing.length >= LOG_LIMIT ? [...existing.slice(1), line] : [...existing, line];
     patch({ logs: { ...state.logs, [projectId]: next } });
   });
 }

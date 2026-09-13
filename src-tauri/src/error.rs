@@ -26,6 +26,17 @@ pub enum OracleError {
     #[error("{0} is not running")]
     NotRunning(String),
 
+    /// A port the project wants is already taken.
+    ///
+    /// Carries what the frontend needs to offer a way out rather than only a complaint:
+    /// who holds the port, and the next port that is genuinely free.
+    #[error("port {port} is already in use by {holder}")]
+    PortInUse {
+        port: u16,
+        holder: String,
+        suggestion: Option<u16>,
+    },
+
     #[error("the launch command is empty")]
     EmptyCommand,
 
@@ -73,6 +84,7 @@ impl OracleError {
             Self::NoRemoteTarget(_) => "no_remote_target",
             Self::AlreadyRunning(_) => "already_running",
             Self::NotRunning(_) => "not_running",
+            Self::PortInUse { .. } => "port_in_use",
             Self::EmptyCommand => "empty_command",
             Self::MissingWorkingDir(_) => "missing_working_dir",
             Self::SpawnFailed(_) => "spawn_failed",
@@ -84,6 +96,25 @@ impl OracleError {
             Self::Git(_) => "git",
             Self::Http(_) => "http",
             Self::Other(_) => "other",
+        }
+    }
+
+    /// Machine-readable payload, for the few errors the UI can act on.
+    ///
+    /// `message` is written for a human to read; an error the frontend has to *do* something
+    /// with needs its parts separately, not parsed back out of a sentence.
+    fn data(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::PortInUse {
+                port,
+                holder,
+                suggestion,
+            } => Some(serde_json::json!({
+                "port": port,
+                "holder": holder,
+                "suggestion": suggestion,
+            })),
+            _ => None,
         }
     }
 
@@ -110,6 +141,8 @@ struct WireError {
     code: &'static str,
     message: String,
     detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
 }
 
 impl serde::Serialize for OracleError {
@@ -118,6 +151,7 @@ impl serde::Serialize for OracleError {
             code: self.code(),
             message: self.to_string(),
             detail: self.detail(),
+            data: self.data(),
         }
         .serialize(serializer)
     }
@@ -149,5 +183,27 @@ mod tests {
         let json = serde_json::to_value(OracleError::EmptyCommand).unwrap();
         assert_eq!(json["code"], "empty_command");
         assert!(json["detail"].is_null());
+    }
+
+    #[test]
+    fn a_port_conflict_carries_its_parts_for_the_ui() {
+        let json = serde_json::to_value(OracleError::PortInUse {
+            port: 3000,
+            holder: "Promethee".into(),
+            suggestion: Some(3001),
+        })
+        .unwrap();
+
+        assert_eq!(json["code"], "port_in_use");
+        assert_eq!(json["message"], "port 3000 is already in use by Promethee");
+        assert_eq!(json["data"]["port"], 3000);
+        assert_eq!(json["data"]["holder"], "Promethee");
+        assert_eq!(json["data"]["suggestion"], 3001);
+    }
+
+    #[test]
+    fn errors_the_ui_cannot_act_on_carry_no_data() {
+        let json = serde_json::to_value(OracleError::EmptyCommand).unwrap();
+        assert!(json.get("data").is_none());
     }
 }

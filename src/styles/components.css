@@ -1,0 +1,91 @@
+/*
+ * Component rules both windows need.
+ *
+ * The main window loads app.css and the tray panel loads panel.css, so anything shared by
+ * the two has nowhere else to live. Loaded last in both documents, which is what lets the
+ * pending-button rule below win over `.btn:disabled` at equal specificity.
+ */
+
+/*
+ * The progress ring.
+ *
+ * Two animations rather than one: the rotation carries the motion, and the travelling dash
+ * stops it reading as a mechanical tick. Both animate compositor-friendly properties on a
+ * 14px element, so the cost is nil even with a dozen visible at once.
+ *
+ * The circumference is 2πr with r = 6, or 37.7 — every dash length below is a fraction of
+ * that number, which is why they are not round.
+ */
+.spinner {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  color: inherit;
+  transform-origin: center;
+  animation:
+    spinner-spin 900ms linear infinite,
+    spinner-appear var(--t-hover) var(--spring);
+}
+
+.spinner circle {
+  animation: spinner-arc 1.4s ease-in-out infinite;
+}
+
+@keyframes spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Grows in from slightly small, so replacing the icon reads as a swap, not a flicker. */
+@keyframes spinner-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes spinner-arc {
+  0% {
+    stroke-dasharray: 2 35.7;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 22 15.7;
+    stroke-dashoffset: -6;
+  }
+  100% {
+    stroke-dasharray: 2 35.7;
+    stroke-dashoffset: -37.7;
+  }
+}
+
+/*
+ * A button waiting on an answer.
+ *
+ * Dimmed less than an ordinary disabled button: the point is to show that something is
+ * happening, which needs the spinner to stay legible.
+ */
+.btn[data-pending] {
+  opacity: 0.8;
+  cursor: progress;
+  transform: none;
+}
+
+/*
+ * Reduced motion keeps the ring turning, slowly, and drops the dash animation.
+ *
+ * An operation of unknown length has to show that it is still alive; a frozen spinner is
+ * indistinguishable from a hung one. Slowing it well below the threshold that triggers
+ * discomfort is the accepted compromise.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: spinner-spin 2.4s linear infinite;
+  }
+
+  .spinner circle {
+    animation: none;
+    stroke-dasharray: 16 21.7;
+  }
+}

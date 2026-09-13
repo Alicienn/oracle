@@ -5,7 +5,7 @@
 //! lets Oracle notice a dev server the user started from a terminal and show it as running
 //! rather than pretending nothing is there.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::TcpStream;
 
@@ -40,6 +40,40 @@ pub async fn wait_for_port(port: u16, timeout: Duration) -> bool {
     }
 
     false
+}
+
+/// How many candidates `find_free_port` tries before giving up.
+const SEARCH_WIDTH: u16 = 64;
+
+/// True when a port cannot be bound because something else holds it.
+///
+/// Binding is the authoritative test, and `is_port_open` answers a different question —
+/// whether something *accepts connections*. The two disagree in the case that matters here:
+/// a server bound to one loopback stack only. Vite, for instance, listens on `[::1]` and
+/// leaves `127.0.0.1` free, so a connect probe on IPv4 reports the port as available right
+/// up until the child process fails with `EADDRINUSE`. Both stacks are therefore checked.
+///
+/// Only `AddrInUse` counts as taken. A machine with IPv6 disabled fails the second bind for
+/// an unrelated reason, and reading that as a conflict would make every port look occupied.
+pub fn port_is_taken(port: u16) -> bool {
+    holds(IpAddr::V4(Ipv4Addr::LOCALHOST), port) || holds(IpAddr::V6(Ipv6Addr::LOCALHOST), port)
+}
+
+fn holds(ip: IpAddr, port: u16) -> bool {
+    match std::net::TcpListener::bind((ip, port)) {
+        Ok(_) => false,
+        Err(err) => err.kind() == std::io::ErrorKind::AddrInUse,
+    }
+}
+
+/// The first free port above `from`, or `None` if the whole search window is taken.
+///
+/// Walks upward rather than picking at random so the suggestion stays recognisable: a user
+/// whose Next.js app normally answers on 3000 expects to be offered 3001, not 47318.
+pub fn find_free_port(from: u16) -> Option<u16> {
+    (1..=SEARCH_WIDTH)
+        .filter_map(|step| from.checked_add(step))
+        .find(|&port| !port_is_taken(port))
 }
 
 /// The PID listening on a loopback port, if any.
@@ -140,6 +174,53 @@ Active Connections
     async fn an_unused_port_reads_as_closed() {
         // Port 1 on loopback is not something a user process can bind without privileges.
         assert!(!is_port_open(1).await);
+    }
+
+    #[test]
+    fn a_taken_port_is_skipped_for_the_next_one() {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken = listener.local_addr().unwrap().port();
+
+        // Searching from just below the bound port must step over it.
+        let found = find_free_port(taken - 1).expect("some port above should be free");
+        assert_ne!(found, taken);
+        assert!(found > taken - 1);
+    }
+
+    #[test]
+    fn a_suggested_port_can_actually_be_bound() {
+        let port = find_free_port(3000).expect("a free port should exist above 3000");
+        assert!(std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+    }
+
+    #[test]
+    fn a_bound_port_reads_as_taken() {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        assert!(port_is_taken(port));
+        drop(listener);
+        assert!(!port_is_taken(port));
+    }
+
+    #[test]
+    fn an_ipv6_only_listener_still_counts_as_taken() {
+        // The Vite case: bound on [::1], nothing on 127.0.0.1. An IPv4-only check would
+        // call this free and let a child process start straight into EADDRINUSE.
+        let Ok(listener) = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) else {
+            // No IPv6 on this machine; there is nothing to assert.
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+
+        assert!(port_is_taken(port));
+    }
+
+    #[test]
+    fn the_search_stops_rather_than_overflowing() {
+        // There is no port above u16::MAX to suggest, and wrapping to 0 would be worse than
+        // admitting defeat.
+        assert_eq!(find_free_port(u16::MAX), None);
     }
 
     #[tokio::test]
