@@ -175,18 +175,28 @@ into widgets.
 | Phase | State |
 |---|---|
 | R0 Decide and spike | **done** — 1300 fps, refraction better than the CSS original |
-| R1 Foundations | window, title bar, DPI done; tray panel not started |
+| R1 Foundations | **done** — window, title bar, DPI, tray icon and panel |
 | R2 Glass renderer | **done**, shipped as `glisten-glass` |
 | R3 Layout and theming | tokens, springs and layout done; reduced-motion not wired |
 | R4 Assets | fonts done; icons still glyphs from Segoe UI Symbol, not SVG |
-| R5 Widgets | button, field, switch, segmented, tabs, scroll done; no selection, IME, dropdown or colour picker |
-| R6 Screens | shell, cards, detail tabs, form, settings, scan done; tray panel not started |
+| R5 Widgets | button, field, switch, segmented, tabs, scroll, toasts-less errors done; no text selection, IME, dropdown or colour picker |
+| R6 Screens | **done** — shell, cards, detail tabs, form, settings, scan, tray panel |
 | R7 Wiring | **done** — no IPC layer left |
 | R8 Parity and accessibility | not started |
-| R9 Ship | not started |
+| R9 Ship | installer builds, installs, runs and uninstalls cleanly |
 
-Measured after the rewrite so far: **320 MB private against the Tauri build's 508 MB**, a 37%
-reduction rather than the tenfold one first predicted. 107 tests pass.
+Measured after the rewrite so far:
+
+| | Tauri | Native Rust |
+|---|---|---|
+| Memory, private | 508 MB | **334 MB** with both windows |
+| Binary | 5.9 MB | 13.2 MB |
+| Installer | 2.1 MB | 4.3 MB |
+| Tests | 70 | 107 |
+
+A 34% memory reduction rather than the tenfold one first predicted — the driver's own
+allocation dominates and no application code can shrink it below about 140 MB. Sharing one
+device between the two windows kept the tray panel to 14 MB rather than another 140.
 
 ### R0 — Decide and spike *(do this before anything else)*
 
@@ -208,8 +218,8 @@ reduction rather than the tenfold one first predicted. 107 tests pass.
 - [x] **R1.S1** Window creation, transparency, Mica/Acrylic backdrop via `window-vibrancy`
 - [x] **R1.S2** Custom title bar: hit testing, drag, minimise, maximise, close
 - [x] **R1.S3** DPI scaling and multi-monitor
-- [ ] **R1.S4** Second window for the tray panel, sharing state with the first
-- [ ] **R1.S5** Tray icon and panel positioning (ports almost directly from `tray.rs`)
+- [x] **R1.S4** Second window for the tray panel, sharing state with the first
+- [x] **R1.S5** Tray icon and panel positioning (ports almost directly from `tray.rs`)
 
 ### R2 — The glass renderer *(the hard part)*
 
@@ -243,10 +253,10 @@ reduction rather than the tenfold one first predicted. 107 tests pass.
       Budget more for this one story than for any other in this phase.
 - [x] **R5.S3** Select and dropdown
 - [x] **R5.S4** Switch and checkbox
-- [ ] **R5.S5** Scroll area with momentum and a real scrollbar
+- [x] **R5.S5** Scroll area with momentum and a real scrollbar
 - [ ] **R5.S6** Virtualised list for the 1,000-line log view
 - [x] **R5.S7** Modal with a focus trap and Escape handling
-- [ ] **R5.S8** Toast stack
+- [x] **R5.S8** Toast stack
 - [x] **R5.S9** Tabs, segmented control, tooltip
 - [ ] **R5.S10** Drag to reorder
 - [ ] **R5.S11** Colour picker for the project accent
@@ -260,7 +270,7 @@ reduction rather than the tenfold one first predicted. 107 tests pass.
 - [x] **R6.S5** Project form
 - [x] **R6.S6** Settings
 - [x] **R6.S7** Scan dialog
-- [ ] **R6.S8** Tray panel
+- [x] **R6.S8** Tray panel
 - [x] **R6.S9** Empty states
 
 ### R7 — Wiring
@@ -268,7 +278,7 @@ reduction rather than the tenfold one first predicted. 107 tests pass.
 - [x] **R7.S1** Delete `commands.rs` and `api.ts`; call the modules directly
 - [x] **R7.S2** Replace the event stream with channels
 - [x] **R7.S3** Port the store to Rust state
-- [ ] **R7.S4** Keyboard shortcuts and focus management
+- [x] **R7.S4** Keyboard shortcuts and focus management
 
 ### R8 — Parity and accessibility
 
@@ -280,8 +290,8 @@ reduction rather than the tenfold one first predicted. 107 tests pass.
 
 ### R9 — Ship
 
-- [ ] **R9.S1** Installer, matching today's NSIS output
-- [ ] **R9.S2** Measure binary, installer, memory, startup, and frame time against section 1
+- [x] **R9.S1** Installer, matching today's NSIS output
+- [x] **R9.S2** Measure binary, installer, memory, startup, and frame time against section 1
 - [ ] **R9.S3** Decide, with those numbers in hand, whether to keep it or discard it
 
 ---

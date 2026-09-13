@@ -1321,6 +1321,17 @@ impl ApplicationHandler for Oracle {
 
         self.build_tray();
         self.window = Some(window);
+
+        // Launched by the autostart entry, or configured to stay out of the way: come up as
+        // a tray icon only.
+        if self.config.settings.start_hidden || crate::core::autostart::launched_hidden() {
+            if let Some(window) = self.window.as_ref() {
+                window.set_visible(false);
+            }
+        }
+
+        self.adopt_running();
+        self.autostart_projects();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -3086,6 +3097,71 @@ impl Oracle {
             }
 
             _ => {}
+        }
+    }
+}
+
+impl Oracle {
+    /// Attaches to dev servers the user started outside Oracle.
+    ///
+    /// Without this, a project already serving on its port shows as stopped and the play
+    /// button offers to start a second copy that will fail to bind.
+    fn adopt_running(&mut self) {
+        let candidates: Vec<Project> = self
+            .config
+            .projects
+            .iter()
+            .filter(|p| p.local.as_ref().and_then(|l| l.port).is_some())
+            .cloned()
+            .collect();
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        let runner = self.runner.clone();
+        self.runtime.spawn(async move {
+            for project in candidates {
+                runner.adopt(&project).await;
+            }
+        });
+    }
+
+    /// Starts the projects flagged to come up with Oracle.
+    fn autostart_projects(&mut self) {
+        if !self.config.settings.autostart_projects {
+            return;
+        }
+
+        let wanted: Vec<Project> = self
+            .config
+            .projects
+            .iter()
+            .filter(|p| {
+                p.local
+                    .as_ref()
+                    .map(|l| l.autostart_with_oracle)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        for project in wanted {
+            // Adoption may still be in flight, so a project already serving is started
+            // again here and refused by the supervisor — which is the correct outcome, not
+            // a second copy.
+            if self.runner.is_running(&project.id) {
+                continue;
+            }
+            match self.runner.start(&project) {
+                Ok(_) => {
+                    self.statuses
+                        .insert(project.id.clone(), ProjectStatus::Starting);
+                }
+                Err(err) => {
+                    eprintln!("Oracle could not autostart {}: {err}", project.name);
+                }
+            }
         }
     }
 }
