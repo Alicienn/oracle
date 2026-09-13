@@ -112,6 +112,18 @@
   opacity: 0.5;
 }
 
+/*
+ * A replacement node that arrived under the pointer.
+ *
+ * Set by glass.ts for a single frame after a render, so the highlight is simply already
+ * there rather than fading in again. Without it, rebuilding a hovered card once a second
+ * made the halo pulse.
+ */
+.glass--live[data-settled]::after {
+  opacity: 0.5;
+  transition: none;
+}
+
 /* Raised variants -------------------------------------------------------- */
 
 .glass--raised {

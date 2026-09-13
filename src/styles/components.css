@@ -89,3 +89,300 @@
     stroke-dasharray: 16 21.7;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Project icon
+ * ------------------------------------------------------------------------ */
+
+.icon-tile {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+  overflow: hidden;
+}
+
+.icon-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/*
+ * A tile showing a real image drops its accent ground.
+ *
+ * The accent is a backdrop for initials. Behind an image it only ever showed as a hairline
+ * around the edge — the image box and the tile round to different subpixels — which read as
+ * an unwanted 1px border. Written as `:has` so it comes back on its own if the image fails
+ * to load and the tile falls back to lettering, and `!important` because the accent arrives
+ * as an inline style — the colour is per project, so it cannot live in a stylesheet.
+ */
+.icon-tile:has(img) {
+  background: transparent !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Status dots, tags and sparklines
+ * ------------------------------------------------------------------------ */
+
+/* Status ------------------------------------------------------------------- */
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  flex: 0 0 8px;
+  background: var(--idle);
+}
+
+.dot[data-status="running"] {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+.dot[data-status="starting"] {
+  background: var(--warn);
+  animation: pulse 1.4s var(--spring-soft) infinite;
+}
+
+.dot[data-status="unhealthy"] {
+  background: var(--warn);
+}
+
+.dot[data-status="crashed"] {
+  background: var(--danger);
+}
+
+.dot[data-status="up"] {
+  background: var(--ok);
+}
+
+.dot[data-status="down"] {
+  background: var(--danger);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  background: var(--line);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* Sparkline ----------------------------------------------------------------- */
+
+.spark {
+  width: 58px;
+  height: 20px;
+  overflow: visible;
+}
+
+.spark path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.spark .spark__fill {
+  fill: var(--accent-wash);
+  stroke: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Buttons
+ * ------------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-2);
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--glass-tint-strong);
+  box-shadow: var(--shadow-near), inset 0 0 0 1px var(--line);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 580;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--t-hover) var(--spring),
+    box-shadow var(--t-hover) var(--spring),
+    transform var(--t-hover) var(--spring);
+}
+
+.btn:hover {
+  background: var(--glass-tint-strong);
+  box-shadow: var(--shadow-lift-near), inset 0 0 0 1px var(--line-strong);
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-near), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.btn--primary:hover {
+  background: var(--accent-bright);
+}
+
+.btn--danger {
+  color: var(--danger);
+}
+
+.btn--ghost {
+  background: transparent;
+  box-shadow: none;
+}
+
+.btn--ghost:hover {
+  background: var(--line);
+  box-shadow: none;
+}
+
+.btn--icon {
+  width: 30px;
+  padding: 0;
+}
+
+.btn svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Toasts
+ * ------------------------------------------------------------------------ */
+
+/*
+ * Shared with the modal in app.css, and defined here because the tray panel needs it and
+ * does not load that file.
+ */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Toasts
+ * ------------------------------------------------------------------------ */
+
+/* ---------------------------------------------------------------------------
+ * Empty state
+ * ------------------------------------------------------------------------ */
+
+.empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--gap-3);
+  padding: var(--gap-6);
+  text-align: center;
+  color: var(--muted);
+}
+
+.toasts {
+  position: fixed;
+  right: var(--gap-4);
+  bottom: var(--gap-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-2);
+  z-index: 60;
+  max-width: 380px;
+}
+
+.toast {
+  padding: var(--gap-3) var(--gap-4);
+  border-radius: var(--r-md);
+  background: var(--glass-tint-strong);
+  animation: rise var(--t-panel) var(--spring);
+}
+
+.toast__title {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  font-weight: 580;
+}
+
+.toast__title svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+.toast__message {
+  margin-top: 5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.toast[data-tone="error"] .toast__title {
+  color: var(--danger);
+}
+
+.toast[data-tone="success"] .toast__title {
+  color: var(--ok);
+}
+
+.toast__detail {
+  margin-top: var(--gap-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.toast summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin-top: 5px;
+}
+

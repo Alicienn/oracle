@@ -10,7 +10,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ViewMode } from "./lib/api";
 import { h, fill, icon, qs, debounce } from "./lib/dom";
 import { brandMark, icons } from "./lib/icons";
-import { installGlass, probePerformance } from "./lib/glass";
+import { installGlass, probePerformance, restoreHighlight } from "./lib/glass";
 import { fluidList, slidingPill } from "./lib/motion";
 import {
   connect,
@@ -37,6 +37,8 @@ import { showProjectForm } from "./components/projectForm";
 import { showSettings } from "./components/settings";
 import { showScan } from "./components/scan";
 import { isModalOpen } from "./components/modal";
+import { showUpdatePrompt } from "./components/updatePrompt";
+import { findUpdate } from "./lib/updates";
 
 const appWindow = getCurrentWindow();
 
@@ -218,6 +220,10 @@ function render(): void {
   }
 
   renderDetail(detail, current);
+
+  // Regions above were rebuilt; the pointer highlight has to be put back on whatever now
+  // sits under the cursor.
+  restoreHighlight();
 }
 
 function bindShortcuts(): void {
@@ -268,6 +274,22 @@ async function main(): Promise<void> {
   // Measured after the first real render, so the number reflects the actual UI rather than
   // an empty page.
   await probePerformance(get().settings.glass);
+
+  void offerUpdate();
 }
 
 void main();
+
+/**
+ * Looks for a new release once, at launch.
+ *
+ * After the first render and the performance probe, so a slow or unreachable release feed
+ * cannot delay the window appearing. Silent when the app is current or the check fails —
+ * Settings is where someone who wants an answer goes to ask.
+ */
+async function offerUpdate(): Promise<void> {
+  if (!get().settings.checkUpdates) return;
+
+  const update = await findUpdate();
+  if (update) showUpdatePrompt(update, get().version);
+}

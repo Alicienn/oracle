@@ -199,25 +199,6 @@ textarea {
   flex: 1;
 }
 
-.icon-tile {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r-sm);
-  display: grid;
-  place-items: center;
-  font-size: var(--text-sm);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: #fff;
-  overflow: hidden;
-}
-
-.icon-tile img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
 /* ---------------------------------------------------------------------------
  * Main column
  * ------------------------------------------------------------------------ */
@@ -357,6 +338,20 @@ textarea {
   gap: var(--gap-3);
 }
 
+/*
+ * Nothing to lay out.
+ *
+ * The card layouts have to be switched off entirely, not just overridden: in grid view the
+ * empty state became a 228px cell in the first column, so it sat against the left edge, and
+ * its own `flex: 1` — which centres it in list view — meant nothing to a grid parent. Comes
+ * after both view rules, which is what lets it win at equal specificity.
+ */
+.list[data-empty="true"] {
+  display: grid;
+  place-content: center;
+  place-items: center;
+}
+
 /* ---------------------------------------------------------------------------
  * Project card
  * ------------------------------------------------------------------------ */
@@ -430,165 +425,7 @@ textarea {
   justify-content: flex-end;
 }
 
-/* Status ------------------------------------------------------------------- */
-
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--r-full);
-  flex: 0 0 8px;
-  background: var(--idle);
-}
-
-.dot[data-status="running"] {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-wash);
-}
-
-.dot[data-status="starting"] {
-  background: var(--warn);
-  animation: pulse 1.4s var(--spring-soft) infinite;
-}
-
-.dot[data-status="unhealthy"] {
-  background: var(--warn);
-}
-
-.dot[data-status="crashed"] {
-  background: var(--danger);
-}
-
-.dot[data-status="up"] {
-  background: var(--ok);
-}
-
-.dot[data-status="down"] {
-  background: var(--danger);
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.45;
-    transform: scale(0.8);
-  }
-}
-
-.tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 19px;
-  padding: 0 7px;
-  border-radius: var(--r-full);
-  background: var(--line);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-}
-
-/* Sparkline ----------------------------------------------------------------- */
-
-.spark {
-  width: 58px;
-  height: 20px;
-  overflow: visible;
-}
-
-.spark path {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.spark .spark__fill {
-  fill: var(--accent-wash);
-  stroke: none;
-}
-
-/* ---------------------------------------------------------------------------
- * Buttons
- * ------------------------------------------------------------------------ */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--gap-2);
-  height: 30px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: var(--glass-tint-strong);
-  box-shadow: var(--shadow-near), inset 0 0 0 1px var(--line);
-  color: var(--ink);
-  font-size: var(--text-sm);
-  font-weight: 580;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background var(--t-hover) var(--spring),
-    box-shadow var(--t-hover) var(--spring),
-    transform var(--t-hover) var(--spring);
-}
-
-.btn:hover {
-  background: var(--glass-tint-strong);
-  box-shadow: var(--shadow-lift-near), inset 0 0 0 1px var(--line-strong);
-}
-
-.btn:active {
-  transform: scale(0.97);
-}
-
-.btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-  transform: none;
-}
-
-.btn--primary {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: var(--shadow-near), inset 0 1px 0 rgba(255, 255, 255, 0.28);
-}
-
-.btn--primary:hover {
-  background: var(--accent-bright);
-}
-
-.btn--danger {
-  color: var(--danger);
-}
-
-.btn--ghost {
-  background: transparent;
-  box-shadow: none;
-}
-
-.btn--ghost:hover {
-  background: var(--line);
-  box-shadow: none;
-}
-
-.btn--icon {
-  width: 30px;
-  padding: 0;
-}
-
-.btn svg {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-}
+/* Icon sizes for the chrome that is particular to this window --------------- */
 
 .rail__item svg {
   width: 18px;
@@ -981,100 +818,141 @@ textarea.input:focus {
   border-top: 1px solid var(--line);
 }
 
+/*
+ * A dialog that leads with a diagnosis.
+ *
+ * Used where the modal exists to report something the user did not ask for — a collision, a
+ * refusal — rather than to collect input. The marked glyph gives it a focal point, so the
+ * nature of the message lands before any of the text is read.
+ */
+.notice {
+  display: flex;
+  gap: var(--gap-3);
+  align-items: flex-start;
+}
+
+.notice__mark {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+/* The same mark in the accent, for a dialog that brings good news rather than a problem. */
+.notice__mark--accent {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.notice__mark svg {
+  width: 17px;
+  height: 17px;
+}
+
+.notice strong {
+  display: block;
+  font-size: var(--text-md);
+  font-weight: 620;
+  letter-spacing: -0.015em;
+}
+
+.notice p {
+  margin: 3px 0 0;
+  color: var(--ink-soft);
+}
+
+/*
+ * Release notes, as the publisher wrote them.
+ *
+ * Plain text in a scrollable box rather than rendered markdown: the content comes from a
+ * release description, and turning arbitrary text into markup is both a parser and a
+ * decision about what is safe to render.
+ */
+.release-notes {
+  margin-top: var(--gap-4);
+  max-height: 180px;
+  overflow-y: auto;
+  padding: var(--gap-3);
+  border-radius: var(--r-md);
+  background: var(--glass-tint-faint);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/*
+ * Two values and the move between them.
+ *
+ * A sentence naming both ports makes the reader hold two numbers and work out which is
+ * which. Showing them side by side, with the destination carrying the accent, makes the
+ * substitution the thing you see rather than the thing you parse.
+ */
+.swap {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-3);
+  margin: var(--gap-4) 0 0;
+  padding: var(--gap-3);
+  border-radius: var(--r-md);
+  background: var(--glass-tint-faint);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.swap__port {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  padding: var(--gap-2) 0;
+  border-radius: var(--r-sm);
+  background: var(--glass-tint);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--muted);
+  /* Struck through: this is the port that is not available. */
+  text-decoration: none;
+}
+
+.swap__port span {
+  font-family: var(--font);
+  font-size: var(--text-xs);
+  font-weight: 560;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--muted-soft);
+}
+
+.swap__port--target {
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+  color: var(--accent);
+}
+
+.swap__port--target span {
+  color: color-mix(in srgb, var(--accent) 80%, var(--muted));
+}
+
+.swap__arrow {
+  flex: 0 0 auto;
+  color: var(--muted-soft);
+  font-size: var(--text-md);
+}
+
 @keyframes fade {
   from {
     opacity: 0;
   }
 }
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(16px) scale(0.97);
-  }
-}
-
-/* ---------------------------------------------------------------------------
- * Toasts
- * ------------------------------------------------------------------------ */
-
-.toasts {
-  position: fixed;
-  right: var(--gap-4);
-  bottom: var(--gap-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap-2);
-  z-index: 60;
-  max-width: 380px;
-}
-
-.toast {
-  padding: var(--gap-3) var(--gap-4);
-  border-radius: var(--r-md);
-  background: var(--glass-tint-strong);
-  animation: rise var(--t-panel) var(--spring);
-}
-
-.toast__title {
-  display: flex;
-  align-items: center;
-  gap: var(--gap-2);
-  font-weight: 580;
-}
-
-.toast__title svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 15px;
-}
-
-.toast__message {
-  margin-top: 5px;
-  color: var(--ink-soft);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.toast[data-tone="error"] .toast__title {
-  color: var(--danger);
-}
-
-.toast[data-tone="success"] .toast__title {
-  color: var(--ok);
-}
-
-.toast__detail {
-  margin-top: var(--gap-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--muted);
-  user-select: text;
-  overflow-wrap: anywhere;
-}
-
-.toast summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: var(--text-sm);
-  margin-top: 5px;
-}
-
-/* ---------------------------------------------------------------------------
- * Empty state
- * ------------------------------------------------------------------------ */
-
-.empty {
-  flex: 1;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: var(--gap-3);
-  padding: var(--gap-6);
-  text-align: center;
-  color: var(--muted);
-}
-
 /* Direct child only: the action buttons below hold their own 14px glyphs. */
 .empty > svg {
   width: 52px;

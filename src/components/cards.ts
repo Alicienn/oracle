@@ -7,6 +7,7 @@ import { brandMark } from "../lib/icons";
 import { open, toggle } from "../lib/actions";
 import { get, patch } from "../lib/store";
 import {
+  activatable,
   button,
   emptyState,
   iconTile,
@@ -26,6 +27,7 @@ export function renderList(
   onScan: () => void,
 ): void {
   host.dataset.view = get().settings.view;
+  host.dataset.empty = String(projects.length === 0);
 
   if (projects.length === 0) {
     const empty = emptyState(
@@ -82,15 +84,15 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
 
   const chart = live && usage ? sparkline(usage.cpuHistory) : null;
 
-  return h(
-    "button",
+  // A div, not a button: the card carries buttons of its own. See `activatable`.
+  const node = h(
+    "div",
     {
       class: "card glass glass--live",
-      type: "button",
+      "aria-label": project.name,
       // `key` is how the filter transition recognises a card across a rebuild, so it can
       // slide to its new row instead of being destroyed and recreated in place.
       dataset: { selected: String(selected), key: project.id },
-      onClick: () => patch({ selectedId: project.id, tab: "overview" }),
     },
     iconTile(project, 34),
     h(
@@ -132,4 +134,6 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
         : null,
     ),
   );
+
+  return activatable(node, () => patch({ selectedId: project.id, tab: "overview" }), ".card__actions");
 }

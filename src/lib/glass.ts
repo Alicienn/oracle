@@ -79,15 +79,52 @@ export function setTheme(theme: Theme): void {
  */
 function trackPointer(): void {
   const update = onFrame((event: PointerEvent) => {
+    pointer = { x: event.clientX, y: event.clientY };
+
     const target = (event.target as Element | null)?.closest?.(".glass--live");
     if (!(target instanceof HTMLElement)) return;
 
-    const box = target.getBoundingClientRect();
-    target.style.setProperty("--mx", `${((event.clientX - box.left) / box.width) * 100}%`);
-    target.style.setProperty("--my", `${((event.clientY - box.top) / box.height) * 100}%`);
+    aim(target, pointer.x, pointer.y);
   });
 
   document.addEventListener("pointermove", update, { passive: true });
+}
+
+/** Where the pointer was last seen, in viewport coordinates. */
+let pointer: { x: number; y: number } | null = null;
+
+function aim(target: HTMLElement, x: number, y: number): void {
+  const box = target.getBoundingClientRect();
+  target.style.setProperty("--mx", `${((x - box.left) / box.width) * 100}%`);
+  target.style.setProperty("--my", `${((y - box.top) / box.height) * 100}%`);
+}
+
+/**
+ * Puts the highlight back on whatever is under the pointer, after a render replaced it.
+ *
+ * The regions here are rebuilt wholesale on every state change — once a second at minimum,
+ * from the metrics tick — so a card under a motionless cursor is a *new element* each time.
+ * It arrives with no `--mx`/`--my` and with the highlight at `opacity: 0`, then fades in
+ * over `--t-hover` because `:hover` matches immediately: the halo jumped to the element's
+ * default position and pulsed once a second while the mouse sat still.
+ *
+ * `data-settled` suppresses that entrance for one frame, so the replacement inherits the
+ * highlight already on screen instead of animating it again. It is removed on the next
+ * frame, which changes nothing visually — `:hover` holds the same opacity — and leaves the
+ * ordinary fade-out intact for when the pointer does leave.
+ */
+export function restoreHighlight(): void {
+  if (!pointer) return;
+
+  const under = document.elementFromPoint(pointer.x, pointer.y);
+  const target = under?.closest?.(".glass--live");
+  if (!(target instanceof HTMLElement)) return;
+
+  aim(target, pointer.x, pointer.y);
+
+  if (target.dataset.settled) return;
+  target.dataset.settled = "true";
+  requestAnimationFrame(() => delete target.dataset.settled);
 }
 
 /**

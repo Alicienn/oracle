@@ -28,7 +28,9 @@ body {
 
 #panel {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  /* One row per region: head, meters, search, list, foot. The list is the only one that
+     grows. A region added to the markup needs a row here, or it takes the list's. */
+  grid-template-rows: auto auto auto 1fr auto;
   height: 100vh;
   border-radius: 16px;
   overflow: hidden;

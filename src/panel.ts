@@ -11,11 +11,12 @@ import type { ProjectView } from "./lib/api";
 import { h, fill, icon, qs } from "./lib/dom";
 import { bytes, percent } from "./lib/format";
 import { brandMark, icons } from "./lib/icons";
-import { installGlass } from "./lib/glass";
+import { installGlass, restoreHighlight } from "./lib/glass";
 import { connect, get, subscribe, visibleProjects, patch } from "./lib/store";
 import { open, toggle } from "./lib/actions";
 import { clearToasts } from "./lib/toast";
 import {
+  activatable,
   button,
   iconTile,
   isLive,
@@ -29,6 +30,7 @@ import {
 
 const head = qs("#panel-head");
 const meters = qs("#panel-meters");
+const search = qs("#panel-search");
 const list = qs("#panel-list");
 const foot = qs("#panel-foot");
 
@@ -82,15 +84,17 @@ function renderMeters(): void {
   );
 }
 
-function renderSearch(): HTMLElement {
-  return h(
-    "div",
-    { class: "panel__search" },
+/**
+ * Built once: the field holds focus and a caret, and the store updates every second from
+ * the metrics tick.
+ */
+function renderSearch(): void {
+  fill(
+    search,
     icon(icons.search),
     h("input", {
       type: "search",
       placeholder: "Search",
-      value: get().query,
       "aria-label": "Search projects",
       onInput: (event: Event) => patch({ query: (event.target as HTMLInputElement).value }),
     }),
@@ -116,17 +120,13 @@ function row(project: ProjectView): HTMLElement {
     meta.push(remoteLabel(project.remoteStatus));
   }
 
-  return h(
-    "button",
+  // A div, not a button: the row carries buttons of its own. See `activatable`.
+  const node = h(
+    "div",
     {
       class: "prow",
-      type: "button",
       title: project.name,
-      // Selecting from the panel opens the full app on that project.
-      onClick: () => {
-        patch({ selectedId: project.id });
-        void api.showMainWindow();
-      },
+      "aria-label": project.name,
     },
     iconTile(project, 26),
     h(
@@ -157,6 +157,16 @@ function row(project: ProjectView): HTMLElement {
             onClick: () => void open(project),
           })
         : h("span"),
+  );
+
+  // Selecting from the panel opens the full app on that project.
+  return activatable(
+    node,
+    () => {
+      patch({ selectedId: project.id });
+      void api.showMainWindow();
+    },
+    ".prow > .btn",
   );
 }
 
@@ -208,14 +218,12 @@ function render(): void {
   renderMeters();
   renderList();
   renderFoot();
+  restoreHighlight();
 }
 
 async function main(): Promise<void> {
   installGlass();
-
-  // The search field lives between the meters and the list; it is rendered once because it
-  // holds focus and re-creating it on every tick would fight the user's typing.
-  meters.insertAdjacentElement("afterend", renderSearch());
+  renderSearch();
 
   subscribe(render);
   render();

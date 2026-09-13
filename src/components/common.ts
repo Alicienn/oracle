@@ -94,33 +94,30 @@ export function remoteDot(status: RemoteStatus): HTMLElement {
  * colour — which is enough to tell a rail of eight projects apart at a glance.
  */
 export function iconTile(project: ProjectView, size = 28): HTMLElement {
+  // The resolved icon, not the stored one: a remote project with no icon of its own is
+  // drawn with the favicon the backend downloaded for it, which arrives here as an ordinary
+  // local file.
+  const source = project.resolvedIcon ?? project.icon;
   const tile = h("span", {
     class: "icon-tile",
     style: { width: `${size}px`, height: `${size}px`, background: project.resolvedAccent },
   });
 
-  if (project.icon.type === "file") {
-    const image = h("img", {
-      src: convertFileSrc(project.icon.value),
-      alt: "",
-      loading: "lazy",
-    });
+  const lettering = () => {
+    tile.textContent = initials(project.name);
+    tile.style.fontSize = `${Math.round(size * 0.4)}px`;
+  };
+
+  if (source.type === "file") {
+    const image = h("img", { src: convertFileSrc(source.value), alt: "" });
     // A missing or unreadable file falls back to initials rather than a broken image.
     image.addEventListener("error", () => {
       image.remove();
-      tile.textContent = initials(project.name);
-    });
-    tile.appendChild(image);
-  } else if (project.icon.type === "favicon") {
-    const image = h("img", { src: project.icon.value, alt: "", loading: "lazy" });
-    image.addEventListener("error", () => {
-      image.remove();
-      tile.textContent = initials(project.name);
+      lettering();
     });
     tile.appendChild(image);
   } else {
-    tile.textContent = initials(project.name);
-    tile.style.fontSize = `${Math.round(size * 0.4)}px`;
+    lettering();
   }
 
   return tile;
@@ -179,6 +176,45 @@ export function spinner(since: number, size = 16): SVGElement {
   if (arc) arc.style.animationDelay = `-${elapsed % ARC_MS}ms`;
 
   return node;
+}
+
+/**
+ * Makes a container behave like a button without being one.
+ *
+ * Cards and panel rows hold their own buttons — play, stop, open — and a `<button>` may not
+ * contain interactive content. The invalid nesting was not harmless: clicking the play
+ * button also activated the card underneath it, selecting the project, because the outer
+ * button's activation does not care that the inner one stopped the event from bubbling.
+ *
+ * `ignoreWithin` is a selector for the region that owns its own controls. Clicks landing
+ * there — on a button, in the gap between two, or on the sparkline — are the action area's
+ * business, never a selection.
+ */
+export function activatable(
+  element: HTMLElement,
+  onActivate: () => void,
+  ignoreWithin?: string,
+): HTMLElement {
+  element.setAttribute("role", "button");
+  element.tabIndex = 0;
+
+  element.addEventListener("click", (event) => {
+    const target = event.target;
+    if (ignoreWithin && target instanceof Element && target.closest(ignoreWithin)) return;
+    onActivate();
+  });
+
+  element.addEventListener("keydown", (event) => {
+    // Enter and Space are what a real button answers to, and losing them would make the
+    // list unusable from the keyboard.
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (event.target !== element) return;
+
+    event.preventDefault();
+    onActivate();
+  });
+
+  return element;
 }
 
 interface ButtonOptions {
