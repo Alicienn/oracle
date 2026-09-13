@@ -2,19 +2,25 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-09-13 — the Tauri build is complete and shipped, and is now the only
-build. The native Rust interface that lived in `src-rust/` has been removed; it is in the
-history up to the commit that deleted it if it is ever wanted back.
+Last updated: 2026-09-13 — shipping, at 0.3.1. The Tauri build is the only build; the native
+Rust interface that lived in `src-rust/` has been removed, and is in the history up to the
+commit that deleted it if it is ever wanted back.
 
 ## Current state
 
 | Build | Where | State |
 |---|---|---|
-| Tauri (WebView2) | `src-tauri/` + `src/` | Complete, installer built, 83 tests |
+| Tauri (WebView2) | `src-tauri/` + `src/` | Shipping, self-updating, 99 tests |
 
-Resident memory is being worked on within this build rather than by replacing it: the tray
-panel's webview is now created on demand instead of living hidden for the session, and the
-frontend no longer keeps log buffers for projects nobody is looking at.
+Everything in the epics below is done. What has been built since, release by release, is in
+[CHANGELOG.md](../CHANGELOG.md) rather than restated here — the epics describe the plan the
+application was built to, and the changelog is what happened afterwards.
+
+Two things are worth carrying forward from the memory work: the tray panel's webview is
+created on demand rather than living hidden for the session, and the frontend keeps log
+buffers only for projects someone is looking at. An embedded web app is deliberately the
+exception — it is kept alive off screen so returning to it does not reload the page, which is
+why the panel reports what it costs.
 
 ---
 
