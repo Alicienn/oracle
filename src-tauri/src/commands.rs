@@ -11,7 +11,7 @@ use crate::monitor::SystemUsage;
 use crate::remote::RemoteStatus;
 use crate::runner::{logs::LogLine, ProjectStatus};
 use crate::state::AppState;
-use crate::{autostart, panel, vcs};
+use crate::{autostart, embed, panel, vcs};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -451,6 +451,59 @@ pub fn reveal_folder(path: PathBuf) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Embedded web apps
+// ---------------------------------------------------------------------------
+
+/// Shows a project's web app in the central panel.
+///
+/// `rect` is where the frontend has room for it, in the coordinates
+/// `getBoundingClientRect` reports. The webview is a native surface that knows nothing about
+/// the layout around it, so every later change of shape has to be reported too.
+#[tauri::command]
+pub fn open_embed(
+    app: AppHandle,
+    state: St,
+    project_id: String,
+    rect: embed::Rect,
+) -> Result<()> {
+    let url = {
+        let config = state.config.read();
+        let project = config
+            .project(&project_id)
+            .ok_or_else(|| OracleError::ProjectNotFound(project_id.clone()))?;
+
+        project
+            .open_url()
+            .ok_or_else(|| OracleError::NoRemoteTarget(project.name.clone()))?
+    };
+
+    embed::open(&app, &project_id, &url, rect).map_err(OracleError::Other)
+}
+
+/// Takes the web app off screen without discarding it, so coming back is instant.
+#[tauri::command]
+pub fn hide_embed(app: AppHandle) {
+    embed::hide_visible(&app);
+}
+
+/// Keeps the webview aligned with the panel it sits in.
+#[tauri::command]
+pub fn set_embed_bounds(app: AppHandle, rect: embed::Rect) {
+    embed::set_bounds(&app, rect);
+}
+
+/// Discards a project's webview, releasing the renderer it was holding.
+#[tauri::command]
+pub fn close_embed(app: AppHandle, project_id: String) {
+    embed::close(&app, &project_id);
+}
+
+#[tauri::command]
+pub fn reload_embed(app: AppHandle) {
+    embed::reload(&app);
 }
 
 // ---------------------------------------------------------------------------

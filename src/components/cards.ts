@@ -5,6 +5,7 @@ import { h, fill } from "../lib/dom";
 import { bytes, percent, shortPath } from "../lib/format";
 import { brandMark } from "../lib/icons";
 import { open, reorder, toggle } from "../lib/actions";
+import { launch } from "./embedView";
 import { get, patch } from "../lib/store";
 import {
   activatable,
@@ -132,7 +133,9 @@ function card(project: ProjectView, usage: Usage | undefined): HTMLElement {
                 : `Start ${project.name}`,
             pending: pending?.since,
             disabled: pending?.kind === "stop",
-            onClick: () => void toggle(project),
+            // Stopping is always just stopping; starting a project that serves a page opens
+            // it, which is the whole point of the central panel.
+            onClick: () => void (live ? toggle(project) : launch(project)),
           })
         : null,
     ),

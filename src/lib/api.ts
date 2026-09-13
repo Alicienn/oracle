@@ -104,6 +104,8 @@ export interface Settings {
   panelShortcut: string;
   minimiseToTray: boolean;
   view: ViewMode;
+  /** Whether the project rail shows names beside its icons. */
+  railExpanded: boolean;
   checkUpdates: boolean;
   lastSeenVersion: string;
 }
@@ -139,6 +141,21 @@ export interface Usage {
 export interface MetricsTick {
   projects: Usage[];
   system: SystemUsage;
+  embed?: EmbedUsage | null;
+}
+
+/** What the web app on screen is costing, when one is open. */
+export interface EmbedUsage {
+  projectId: string;
+  memory: number;
+}
+
+/** Where an embedded web app should sit, in `getBoundingClientRect` coordinates. */
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface RemoteReport {
@@ -275,6 +292,22 @@ export const api = {
   updateSettings: (settings: Settings) =>
     invoke<Settings>("update_settings", { settings }),
   autostartState: () => invoke<boolean>("get_autostart_state"),
+  /**
+   * Shows a project's web app inside the window, creating its webview if needed.
+   *
+   * The rect is where the central panel has room. A webview is a native surface with no
+   * knowledge of the layout around it, so it has to be told, and told again on every
+   * change of shape.
+   */
+  openEmbed: (projectId: string, rect: Rect) =>
+    invoke<void>("open_embed", { projectId, rect }),
+  /** Off screen, but alive: coming back keeps the page exactly as it was left. */
+  hideEmbed: () => invoke<void>("hide_embed"),
+  setEmbedBounds: (rect: Rect) => invoke<void>("set_embed_bounds", { rect }),
+  /** Discards the webview, releasing the renderer it holds. */
+  closeEmbed: (projectId: string) => invoke<void>("close_embed", { projectId }),
+  reloadEmbed: () => invoke<void>("reload_embed"),
+
   /** Drops a project's cached icon and fetches it again. */
   refreshFavicon: (projectId: string) => invoke<void>("refresh_favicon", { projectId }),
 

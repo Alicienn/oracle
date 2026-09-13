@@ -27,6 +27,16 @@ const SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 pub struct MetricsTick {
     pub projects: Vec<Usage>,
     pub system: SystemUsage,
+    /// What the web app on screen is costing, when one is open.
+    pub embed: Option<EmbedUsage>,
+}
+
+/// The memory held by the webview currently shown in the central panel.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedUsage {
+    pub project_id: String,
+    pub memory: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,9 +62,17 @@ pub fn spawn_metrics_loop(app: AppHandle) {
             let tick = {
                 let roots = state.running_roots();
                 let mut monitor = state.monitor.lock();
+                let projects = monitor.sample(&roots);
+                let system = monitor.system_usage();
+                // Dropped before asking about the embed, which takes the same lock.
+                drop(monitor);
+
                 MetricsTick {
-                    projects: monitor.sample(&roots),
-                    system: monitor.system_usage(),
+                    projects,
+                    system,
+                    embed: crate::embed::visible_memory(&app).map(|(project_id, memory)| {
+                        EmbedUsage { project_id, memory }
+                    }),
                 }
             };
 

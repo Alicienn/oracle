@@ -1,6 +1,6 @@
 [package]
 name = "oracle"
-version = "0.2.1"
+version = "0.3.0"
 description = "Command center for your projects"
 authors = ["Alicien"]
 edition = "2021"
@@ -14,7 +14,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png", "devtools"] }
+# `unstable` is what exposes multiple webviews in one window, which is how a project's web
+# app is shown inside the central panel. It is the only way to do that without an iframe,
+# and iframes are refused by any site that sets X-Frame-Options.
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png", "devtools", "unstable"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"

@@ -21,6 +21,8 @@ pub struct AppState {
     pub remote: RwLock<HashMap<String, RemoteStatus>>,
     /// Cached icon file per project, for the ones that serve one.
     pub favicons: RwLock<HashMap<String, PathBuf>>,
+    /// Project web apps open inside the window.
+    pub embeds: RwLock<crate::embed::Embeds>,
     pub http: reqwest::Client,
     /// Startup notices worth showing once, such as a recovered config file.
     pub warnings: RwLock<Vec<String>>,
@@ -43,6 +45,7 @@ impl AppState {
             monitor: Mutex::new(Monitor::new()),
             remote: RwLock::new(HashMap::new()),
             favicons: RwLock::new(HashMap::new()),
+            embeds: RwLock::new(crate::embed::Embeds::default()),
             http: crate::remote::client(),
             warnings: RwLock::new(warnings),
         }

@@ -24,12 +24,14 @@
       <div class="shell" id="shell" data-detail="closed">
         <nav class="rail" id="rail" aria-label="Projects"></nav>
 
-        <main class="column">
+        <main class="column" id="column" data-mode="list">
           <div class="toolbar">
             <div class="search" id="search"></div>
             <div class="toolbar__controls" id="toolbar-controls"></div>
           </div>
           <div class="list" id="list" data-view="list"></div>
+          <!-- A project's web app takes the whole column; the rail and title bar stay. -->
+          <div class="webapp" id="webapp"></div>
         </main>
 
         <aside class="detail" id="detail" aria-label="Project details"></aside>

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions granted to the Oracle windows.",
-  "windows": [
+  "description": "Permissions granted to Oracle's own webviews. Scoped by webview label rather than by window: a capability that lists `windows` is enabled on every webview inside them, which would grant an embedded project page the whole command surface.",
+  "webviews": [
     "main",
     "panel"
   ],

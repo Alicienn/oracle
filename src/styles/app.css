@@ -320,6 +320,21 @@ textarea {
   grid-template-columns: 64px minmax(300px, 1fr) minmax(360px, 42%);
 }
 
+/*
+ * The rail can be widened to show project names.
+ *
+ * Animated on the same grid transition as the detail pane, which is also what carries the
+ * embedded webview to its new position: the frontend reports the panel's rect throughout
+ * the animation, so the native surface follows rather than jumping at the end.
+ */
+.shell[data-rail="expanded"] {
+  grid-template-columns: 212px minmax(340px, 1fr) 0;
+}
+
+.shell[data-rail="expanded"][data-detail="open"] {
+  grid-template-columns: 212px minmax(300px, 1fr) minmax(360px, 42%);
+}
+
 /* ---------------------------------------------------------------------------
  * Rail
  * ------------------------------------------------------------------------ */
@@ -377,6 +392,72 @@ textarea {
 
 .rail__spacer {
   flex: 1;
+}
+
+/*
+ * Between the dashboard and the projects.
+ *
+ * A hairline rather than a gap: the rail is a single column of round tiles, and spacing
+ * alone reads as an accident at this density.
+ */
+.rail__rule {
+  flex: 0 0 1px;
+  width: 22px;
+  height: 1px;
+  margin: var(--gap-1) 0;
+  background: var(--line-strong);
+}
+
+.rail[data-expanded="true"] .rail__rule {
+  width: auto;
+  align-self: stretch;
+  margin: var(--gap-2) var(--gap-2);
+}
+
+/*
+ * A project's name, beside its icon.
+ *
+ * Always in the DOM and hidden when collapsed: a name that only existed in one state would
+ * mean rebuilding the rail to expand it, and the rail is what a drag is happening in.
+ */
+.rail__name {
+  display: none;
+}
+
+.rail__chevron {
+  transition: transform var(--t-hover) var(--spring);
+}
+
+.rail__chevron--back {
+  transform: rotate(180deg);
+}
+
+.rail[data-expanded="true"] {
+  align-items: stretch;
+  padding: var(--gap-3) var(--gap-2);
+}
+
+.rail[data-expanded="true"] .rail__item {
+  width: auto;
+  justify-content: start;
+  grid-auto-flow: column;
+  gap: var(--gap-3);
+  padding: 0 var(--gap-2);
+}
+
+.rail[data-expanded="true"] .rail__name {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 560;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail[data-expanded="true"] .rail__badge {
+  right: auto;
+  left: 31px;
+  bottom: 6px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -535,6 +616,113 @@ textarea {
   grid-template-columns: 1fr;
   place-content: center;
   place-items: center;
+}
+
+/* ---------------------------------------------------------------------------
+ * Embedded web app
+ * ------------------------------------------------------------------------ */
+
+/*
+ * The column shows one thing at a time.
+ *
+ * `display: none` rather than a class swap, so the list keeps its scroll position and the
+ * search field keeps its text while a web app is open.
+ */
+.column[data-mode="list"] .webapp,
+.column[data-mode="webapp"] .toolbar,
+.column[data-mode="webapp"] .list {
+  display: none;
+}
+
+.webapp {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/*
+ * The strip above the page.
+ *
+ * Everything that belongs to Oracle rather than to the web app lives here, because below it
+ * is a native surface that nothing of ours can draw on.
+ */
+.webapp__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  padding: var(--gap-2) var(--gap-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.webapp__name {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.webapp__url {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+  user-select: text;
+}
+
+/*
+ * What this view costs, said quietly.
+ *
+ * A webview is a renderer process and Oracle keeps it alive so that coming back does not
+ * reload the page — which is a real cost, and one the user should be able to see rather
+ * than discover in Task Manager. Tabular figures and a fixed transition so a number that
+ * changes every second does not twitch.
+ */
+.webapp__memory {
+  color: var(--muted-soft);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: opacity var(--t-page) var(--spring);
+}
+
+.webapp__memory:empty {
+  opacity: 0;
+}
+
+/* The rectangle the native webview is positioned over. Nothing may be drawn here. */
+.webapp__host {
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+ * The launch stage: what is shown while the project comes up.
+ *
+ * Deliberately sparse. It stands in for a page that is not ready, and anything busy here
+ * would compete with the page that replaces it a second later.
+ */
+.webapp__stage {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--gap-4);
+  padding: var(--gap-6);
+  text-align: center;
+  animation: fade var(--t-page) var(--spring);
+}
+
+.webapp__stage strong {
+  font-size: var(--text-lg);
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+.webapp__stage p {
+  margin: 0;
+  color: var(--muted);
 }
 
 /* ---------------------------------------------------------------------------

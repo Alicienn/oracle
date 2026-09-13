@@ -23,6 +23,21 @@ import { toast } from "./toast";
 export type Filter = "all" | "local" | "remote" | "running";
 export type Tab = "overview" | "logs" | "metrics" | "git";
 
+/**
+ * How far along showing a project's web app is.
+ *
+ * `launching` while the project boots, `ready` for the beat after its port answers, `open`
+ * once the webview is on screen, `failed` when it never came up. The pause between `ready`
+ * and `open` is deliberate: a web app shown the instant its port accepts a connection is
+ * usually still compiling, and lands on a blank page or an error.
+ */
+export type EmbedPhase = "launching" | "ready" | "open" | "failed";
+
+export interface EmbedState {
+  projectId: string;
+  phase: EmbedPhase;
+}
+
 /** An operation the user asked for that the backend has not yet answered. */
 export type Pending = "start" | "stop";
 
@@ -78,6 +93,10 @@ export interface State {
    * the user just pressed has been answered.
    */
   pending: Record<string, PendingOp>;
+  /** The web app showing in the central panel, if any. */
+  embed: EmbedState | null;
+  /** Resident memory of that web app's renderer, in bytes. */
+  embedMemory: number | null;
   selectedId: string | null;
   tab: Tab;
   filter: Filter;
@@ -102,6 +121,7 @@ const initial: State = {
     panelShortcut: "CmdOrCtrl+Shift+Space",
     minimiseToTray: true,
     view: "list",
+    railExpanded: false,
     checkUpdates: true,
     lastSeenVersion: "",
   },
@@ -110,6 +130,8 @@ const initial: State = {
   logs: {},
   git: {},
   pending: {},
+  embed: null,
+  embedMemory: null,
   selectedId: null,
   tab: "overview",
   filter: "all",
@@ -307,7 +329,15 @@ export async function connect(): Promise<void> {
   await events.metrics((tick) => {
     const usage: Record<string, Usage> = {};
     for (const item of tick.projects) usage[item.projectId] = item;
-    patch({ usage, system: tick.system });
+
+    // The embed's memory rides this tick rather than being polled: it is already measured,
+    // once a second is exactly the right cadence for a figure meant to be glanced at, and
+    // nothing has to ask for it.
+    patch({
+      usage,
+      system: tick.system,
+      embedMemory: tick.embed?.memory ?? null,
+    });
   });
 
   await events.remote((reports: RemoteReport[]) => {

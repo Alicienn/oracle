@@ -117,6 +117,18 @@ impl Monitor {
     }
 
     /// Drops the history for a project that is no longer running.
+    /// Resident memory summed over a set of pids, in bytes.
+    ///
+    /// Reads the last refresh rather than taking one: the caller is the metrics tick, which
+    /// has just refreshed, and a second scan a millisecond later would cost the same as the
+    /// first for no new information. A pid that has gone contributes nothing.
+    pub fn memory_of(&self, pids: &[u32]) -> u64 {
+        pids.iter()
+            .filter_map(|pid| self.system.process(Pid::from_u32(*pid)))
+            .map(|process| process.memory())
+            .sum()
+    }
+
     pub fn forget(&mut self, project_id: &str) {
         self.history.remove(project_id);
     }

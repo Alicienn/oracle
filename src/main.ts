@@ -12,6 +12,7 @@ import { h, fill, icon, qs, debounce } from "./lib/dom";
 import { brandMark, icons } from "./lib/icons";
 import { installGlass, probePerformance, restoreHighlight } from "./lib/glass";
 import { fluidList, slidingPill } from "./lib/motion";
+import { guard, watchForFaults } from "./lib/faults";
 import {
   connect,
   get,
@@ -37,6 +38,7 @@ import { showProjectForm } from "./components/projectForm";
 import { showSettings } from "./components/settings";
 import { showScan } from "./components/scan";
 import { isModalOpen } from "./components/modal";
+import { renderEmbed, leaveWebApp, watchLaunches } from "./components/embedView";
 import { mountUpdateChip } from "./components/updateChip";
 import { offerChangelog } from "./components/changelogChip";
 import { findUpdate } from "./lib/updates";
@@ -49,7 +51,9 @@ const shell = qs("#shell");
 const rail = qs("#rail");
 const search = qs("#search");
 const toolbarControls = qs("#toolbar-controls");
+const column = qs("#column");
 const list = qs("#list");
+const webapp = qs("#webapp");
 const detail = qs("#detail");
 
 function renderChrome(): void {
@@ -203,10 +207,32 @@ function render(): void {
   const state = get();
   const current = selected();
 
-  shell.dataset.detail = current ? "open" : "closed";
+  // A web app takes the whole column. The rail and the title bar stay: they are how you get
+  // back out, and losing them would make the window feel like a different application.
+  const showing = state.embed !== null;
+  column.dataset.mode = showing ? "webapp" : "list";
+  shell.dataset.detail = current && !showing ? "open" : "closed";
+  shell.dataset.rail = state.settings.railExpanded ? "expanded" : "collapsed";
 
-  syncToolbar();
-  renderRail(rail, [...state.projects].sort((a, b) => a.order - b.order), () => showProjectForm(), showSettings);
+  const ordered = [...state.projects].sort((a, b) => a.order - b.order);
+
+  guard("web app panel", () => renderEmbed(webapp));
+  guard("rail", () =>
+    renderRail(rail, ordered, () => showProjectForm(), showSettings, () => {
+      // Out of a web app if one is open, and out of the detail pane either way: Dashboard
+      // means the plain list of projects.
+      if (get().embed) void leaveWebApp();
+      patch({ selectedId: null });
+    }),
+  );
+
+  if (showing) {
+    // Nothing below this is visible, and the list in particular must not keep animating
+    // behind a native surface that is covering it.
+    return;
+  }
+
+  guard("toolbar", syncToolbar);
 
   const changed = state.filter !== shown.filter || state.query.trim() !== shown.query;
   shown = { filter: state.filter, query: state.query.trim() };
@@ -214,13 +240,15 @@ function render(): void {
   const paint = () =>
     renderList(list, visibleProjects(), state.usage, () => showProjectForm(), showScan);
 
-  if (changed) {
-    fluidList(list, paint);
-  } else {
-    paint();
-  }
+  guard("project list", () => {
+    if (changed) {
+      fluidList(list, paint);
+    } else {
+      paint();
+    }
+  });
 
-  renderDetail(detail, current);
+  guard("detail panel", () => renderDetail(detail, current));
 
   // Regions above were rebuilt; the pointer highlight has to be put back on whatever now
   // sits under the cursor.
@@ -254,19 +282,28 @@ function bindShortcuts(): void {
       return;
     }
 
-    if (event.key === "Escape" && !typing && get().selectedId) {
-      patch({ selectedId: null });
+    if (event.key === "Escape" && !typing) {
+      // Out of the web app first: it is the more enclosing thing to be inside.
+      if (get().embed) {
+        void leaveWebApp();
+        return;
+      }
+      if (get().selectedId) patch({ selectedId: null });
     }
   });
 }
 
 async function main(): Promise<void> {
+  // Before anything else, so a fault during startup is reported rather than swallowed.
+  watchForFaults();
+
   installGlass();
   renderChrome();
   renderSearch();
   buildToolbar();
   bindShortcuts();
 
+  watchLaunches();
   subscribe(render);
   render();
 

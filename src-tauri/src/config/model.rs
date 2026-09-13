@@ -320,6 +320,13 @@ pub struct Settings {
     #[serde(default = "yes")]
     pub check_updates: bool,
 
+    /// Whether the project rail shows names beside its icons.
+    ///
+    /// Collapsed by default: the rail is meant to be glanceable, and the names matter most
+    /// when a web app has taken over the panel beside it.
+    #[serde(default)]
+    pub rail_expanded: bool,
+
     /// The version whose changelog the user has already seen.
     ///
     /// Compared against the running version to decide whether an update just happened.
@@ -351,6 +358,7 @@ impl Default for Settings {
             minimise_to_tray: true,
             view: ViewMode::default(),
             check_updates: true,
+            rail_expanded: false,
             last_seen_version: String::new(),
         }
     }

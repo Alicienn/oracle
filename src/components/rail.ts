@@ -10,7 +10,7 @@ import type { ProjectView } from "../lib/api";
 import { h, fill, icon } from "../lib/dom";
 import { icons } from "../lib/icons";
 import { reorder } from "../lib/actions";
-import { get, patch } from "../lib/store";
+import { get, patch, saveSettings } from "../lib/store";
 import { iconTile, statusLabel } from "./common";
 
 export function renderRail(
@@ -18,8 +18,10 @@ export function renderRail(
   projects: ProjectView[],
   onAdd: () => void,
   onSettings: () => void,
+  onDashboard: () => void,
 ): void {
   let draggedId: string | null = null;
+  const expanded = get().settings.railExpanded;
 
   const items = projects.map((project) => {
     const item = h(
@@ -41,6 +43,10 @@ export function renderRail(
         class: "rail__badge",
         style: { background: badgeColour(project) },
       }),
+      // Rendered either way and hidden by CSS when collapsed: a name that only exists in
+      // one state would make expanding rebuild the rail, and the rail is what the drag is
+      // happening in.
+      h("span", { class: "rail__name" }, project.name),
     );
 
     item.addEventListener("dragstart", (event) => {
@@ -77,10 +83,42 @@ export function renderRail(
     return item;
   });
 
+  host.dataset.expanded = String(expanded);
+
+  const embedded = get().embed !== null;
+
   fill(
     host,
+    // The way back to the project list, and the only way back when a web app has taken the
+    // central panel. Above the projects and separated from them, because it is not one.
+    h(
+      "button",
+      {
+        class: "rail__item",
+        type: "button",
+        title: "Dashboard",
+        "aria-label": "Dashboard",
+        dataset: { selected: String(!embedded && get().selectedId === null) },
+        onClick: onDashboard,
+      },
+      icon(icons.grid),
+      h("span", { class: "rail__name" }, "Dashboard"),
+    ),
+    h("div", { class: "rail__rule", role: "separator" }),
     ...items,
     h("div", { class: "rail__spacer" }),
+    h(
+      "button",
+      {
+        class: "rail__item",
+        type: "button",
+        title: expanded ? "Collapse the rail" : "Expand the rail",
+        "aria-label": expanded ? "Collapse the rail" : "Expand the rail",
+        onClick: () => void saveSettings({ railExpanded: !expanded }),
+      },
+      icon(icons.chevron, expanded ? "rail__chevron rail__chevron--back" : "rail__chevron"),
+      h("span", { class: "rail__name" }, "Collapse"),
+    ),
     h(
       "button",
       {
@@ -91,6 +129,7 @@ export function renderRail(
         onClick: onAdd,
       },
       icon(icons.plus),
+      h("span", { class: "rail__name" }, "Add a project"),
     ),
     h(
       "button",
@@ -102,6 +141,7 @@ export function renderRail(
         onClick: onSettings,
       },
       icon(icons.settings),
+      h("span", { class: "rail__name" }, "Settings"),
     ),
   );
 }

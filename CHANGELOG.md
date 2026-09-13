@@ -4,6 +4,28 @@ Every released version has a section here, and the release script refuses to pub
 that does not: an update that cannot say what it changed is an update nobody has a reason to
 accept. The section for the running version is what Oracle shows after it updates itself.
 
+## 0.3.0
+
+- Project web apps open inside Oracle. Pressing start on a project that serves a page shows
+  it booting in the central panel, waits a beat past the moment its port answers — a server
+  that is listening is often still compiling — and then reveals the page. The rail and the
+  title bar stay where they are.
+- Leaving a web app keeps it alive off screen, so coming back does not reload the page or
+  lose what was typed into it. The strip above it says what that costs in memory, and closing
+  the view gives it back.
+- The rail can be expanded to show project names, and collapsed again. It starts with a
+  Dashboard entry, separated from the projects, which is how you get back out of a web app.
+- The interface reports its own faults. One `render` call rebuilds every region, so an
+  exception anywhere inside it used to abandon the rest and leave the window half-drawn with
+  nothing said — which is how the web app panel first appeared as an empty black rectangle.
+  Each region is now guarded and named, and anything that escapes becomes a toast with its
+  stack.
+- Settings has a Changelog button, next to the update controls.
+- A project's icon can be fetched again, past the cache, from its form.
+- Security: Oracle's permissions are now scoped to its own webviews rather than to the window
+  holding them. A capability granted to a window is granted to every webview inside it, which
+  would have handed an embedded project page the whole command surface.
+
 ## 0.2.1
 
 - Fixed: "Check for updates" in Settings found an update and then closed the dialog without

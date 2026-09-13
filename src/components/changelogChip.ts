@@ -83,6 +83,21 @@ function mount(version: string, notes: string): void {
   fill(host, chip);
 }
 
+/**
+ * Opens the notes for the running version on demand.
+ *
+ * The chip is transient — read once and gone — but "what changed in the version I am
+ * running" stays a fair question afterwards, so Settings can ask it at any time.
+ */
+export async function showChangelog(): Promise<boolean> {
+  const version = get().version;
+  const notes = await api.changelog();
+  if (!notes) return false;
+
+  show(version, notes, () => {});
+  return true;
+}
+
 function show(version: string, notes: string, onRead: () => void): void {
   showModal({
     title: `What's new in ${version}`,

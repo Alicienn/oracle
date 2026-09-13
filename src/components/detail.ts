@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import { open, remove, restart, revealFolder, toggle, toggleFavorite } from "../lib/actions";
 import { get, loadGit, loadLogs, patch, type Tab } from "../lib/store";
 import { showProjectForm } from "./projectForm";
+import { launch, openWebApp } from "./embedView";
 import {
   button,
   iconTile,
@@ -169,7 +170,7 @@ function overviewPane(project: ProjectView, live: boolean): HTMLElement {
           title: pending ? pendingLabel(pending.kind, project.name) : undefined,
           pending: pending?.since,
           disabled: pending?.kind === "stop",
-          onClick: () => void toggle(project),
+          onClick: () => void (live ? toggle(project) : launch(project)),
         })
       : null,
     project.local && live
@@ -181,8 +182,18 @@ function overviewPane(project: ProjectView, live: boolean): HTMLElement {
           onClick: () => void restart(project),
         })
       : null,
+    // Two ways out to the page, named for where it lands. Offered for anything with an
+    // address, including a project that only exists on a server: there is nothing to start
+    // there, and the page is exactly as viewable.
     project.resolvedUrl
-      ? button({ label: "Open", iconName: "external", onClick: () => void open(project) })
+      ? button({
+          label: "Open here",
+          iconName: "grid",
+          onClick: () => void openWebApp(project),
+        })
+      : null,
+    project.resolvedUrl
+      ? button({ label: "Browser", iconName: "external", onClick: () => void open(project) })
       : null,
     project.local
       ? button({

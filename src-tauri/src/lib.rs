@@ -5,6 +5,7 @@ pub mod changelog;
 pub mod commands;
 pub mod config;
 pub mod discovery;
+pub mod embed;
 pub mod error;
 pub mod favicon;
 pub mod monitor;
@@ -81,6 +82,11 @@ pub fn run() {
             commands::import_icon,
             commands::refresh_favicon,
             commands::reveal_folder,
+            commands::open_embed,
+            commands::hide_embed,
+            commands::set_embed_bounds,
+            commands::close_embed,
+            commands::reload_embed,
             commands::show_main_window,
             commands::hide_panel,
             commands::quit_app,

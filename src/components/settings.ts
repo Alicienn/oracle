@@ -5,10 +5,12 @@ import type { GlassLevel, Theme } from "../lib/api";
 import { h, fill } from "../lib/dom";
 import { glassLevel } from "../lib/glass";
 import { get, reportError, saveSettings } from "../lib/store";
+import { toast } from "../lib/toast";
 import { brandMark } from "../lib/icons";
 import { button, segmented, toggleRow } from "./common";
 import { closeModal, showModal } from "./modal";
 import { mountUpdateChip } from "./updateChip";
+import { showChangelog } from "./changelogChip";
 import { checkNow } from "../lib/updates";
 
 export function showSettings(): void {
@@ -239,6 +241,24 @@ export function showSettings(): void {
     },
   });
 
+  const changelogButton = button({
+    label: "Changelog",
+    onClick: async () => {
+      // Replaces the settings dialog rather than stacking on it: there is one modal host,
+      // and two dialogs cannot be open at once.
+      closeModal();
+
+      if (!(await showChangelog())) {
+        updateStatus.textContent = "";
+        toast({
+          tone: "info",
+          title: "No release notes",
+          message: `This build has no changelog entry for ${get().version}.`,
+        });
+      }
+    },
+  });
+
   const about = h(
     "div",
     { class: "section" },
@@ -268,6 +288,7 @@ export function showSettings(): void {
       "div",
       { style: { display: "flex", alignItems: "center", gap: "12px", marginTop: "8px" } },
       checkButton,
+      changelogButton,
       updateStatus,
     ),
   );
