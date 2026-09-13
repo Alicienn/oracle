@@ -64,8 +64,14 @@ export const icons = {
   maximise: stroke(`<rect x="3.6" y="3.6" width="8.8" height="8.8" rx="1.6"/>`),
   chevron: stroke(`<path d="m6 3.5 4.5 4.5L6 12.5"/>`),
 
+  // A gear drawn from its geometry rather than a copied path: a hub, a rim, and eight
+  // teeth on 45° spokes. Every coordinate is derived, so nothing lands outside the viewBox
+  // and gets clipped the way a hand-tweaked path did.
   settings: stroke(
-    `<circle cx="8" cy="8" r="2.2"/><path d="M12.9 9.6a1.2 1.2 0 0 0 .24 1.32l.04.04a1.45 1.45 0 1 1-2.06 2.06l-.04-.04a1.2 1.2 0 0 0-1.32-.24 1.2 1.2 0 0 0-.73 1.1v.12a1.45 1.45 0 1 1-2.9 0v-.06a1.2 1.2 0 0 0-.79-1.1 1.2 1.2 0 0 0-1.32.24l-.04.04a1.45 1.45 0 1 1-2.06-2.06l.04-.04a1.2 1.2 0 0 0 .24-1.32 1.2 1.2 0 0 0-1.1-.73h-.12a1.45 1.45 0 1 1 0-2.9h.06a1.2 1.2 0 0 0 1.1-.79 1.2 1.2 0 0 0-.24-1.32l-.04-.04A1.45 1.45 0 1 1 3.94 1.9l.04.04a1.2 1.2 0 0 0 1.32.24h.06a1.2 1.2 0 0 0 .73-1.1v-.12a1.45 1.45 0 1 1 2.9 0v.06a1.2 1.2 0 0 0 .73 1.1 1.2 1.2 0 0 0 1.32-.24l.04-.04a1.45 1.45 0 1 1 2.06 2.06l-.04.04a1.2 1.2 0 0 0-.24 1.32v.06a1.2 1.2 0 0 0 1.1.73h.12a1.45 1.45 0 1 1 0 2.9h-.06a1.2 1.2 0 0 0-1.1.73z"/>`,
+    `<circle cx="8" cy="8" r="2"/>` +
+      `<circle cx="8" cy="8" r="4.6"/>` +
+      `<path d="M12.6 8h1.6M11.25 11.25l1.13 1.13M8 12.6v1.6M4.75 11.25l-1.13 1.13` +
+      `M3.4 8H1.8M4.75 4.75 3.62 3.62M8 3.4V1.8M11.25 4.75l1.13-1.13"/>`,
   ),
 
   folder: stroke(`<path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.3l1.4 1.7h5.1A1.6 1.6 0 0 1 14 6.3v5.1A1.6 1.6 0 0 1 12.4 13H3.6A1.6 1.6 0 0 1 2 11.4z"/>`),

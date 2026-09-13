@@ -554,6 +554,20 @@ textarea {
 .btn svg {
   width: 14px;
   height: 14px;
+  flex: 0 0 14px;
+}
+
+.rail__item svg {
+  width: 18px;
+  height: 18px;
+}
+
+.window-controls svg,
+.tabs svg,
+.filters svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -976,6 +990,19 @@ textarea.input:focus {
   font-weight: 580;
 }
 
+.toast__title svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+.toast__message {
+  margin-top: 5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .toast[data-tone="error"] .toast__title {
   color: var(--danger);
 }
@@ -1015,7 +1042,8 @@ textarea.input:focus {
   color: var(--muted);
 }
 
-.empty svg {
+/* Direct child only: the action buttons below hold their own 14px glyphs. */
+.empty > svg {
   width: 52px;
   height: 52px;
   opacity: 0.3;

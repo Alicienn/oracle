@@ -1,8 +1,9 @@
 //! The shape of everything Oracle persists.
 //!
 //! These types are the contract between the backend, the config file on disk, and the
-//! frontend. Every field is optional-tolerant on read (`#[serde(default)]`) so that a config
-//! written by an older build still loads after an upgrade.
+//! frontend. Reading is tolerant of missing fields so a config written by an older build
+//! still loads after an upgrade — `Settings` and `Config` default at the container level,
+//! so anything absent is filled from Oracle's own defaults rather than the type's.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -291,42 +292,26 @@ pub enum RepoProvider {
 // Settings
 // ---------------------------------------------------------------------------
 
+/// Container-level `#[serde(default)]` on purpose.
+///
+/// With per-field defaults, a field missing from an older config file falls back to the
+/// *type's* default — an empty `Vec` for `scan_roots`, `false` for every flag — rather than
+/// to what Oracle actually considers sensible. Defaulting at the container means any missing
+/// field is filled from `Settings::default()` below, so upgrading never silently downgrades
+/// a setting. Fields present in the file still win, including a deliberately empty list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    #[serde(default)]
     pub start_with_windows: bool,
-
-    #[serde(default)]
     pub start_hidden: bool,
-
-    #[serde(default = "default_true")]
     pub autostart_projects: bool,
-
-    #[serde(default)]
     pub theme: Theme,
-
-    #[serde(default)]
     pub glass: GlassLevel,
-
-    #[serde(default = "default_interval")]
     pub health_interval_secs: u32,
-
-    #[serde(default)]
     pub scan_roots: Vec<PathBuf>,
-
-    #[serde(default = "default_shortcut")]
     pub panel_shortcut: String,
-
-    #[serde(default = "default_true")]
     pub minimise_to_tray: bool,
-
-    #[serde(default)]
     pub view: ViewMode,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_shortcut() -> String {
@@ -398,20 +383,11 @@ pub enum ViewMode {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Config {
-    #[serde(default = "default_version")]
     pub version: u32,
-
-    #[serde(default)]
     pub projects: Vec<Project>,
-
-    #[serde(default)]
     pub settings: Settings,
-}
-
-fn default_version() -> u32 {
-    CONFIG_VERSION
 }
 
 impl Default for Config {
@@ -503,6 +479,31 @@ mod tests {
             config.projects.iter().map(|p| p.order).collect::<Vec<_>>(),
             [0, 1, 2]
         );
+    }
+
+    #[test]
+    fn a_settings_block_missing_fields_falls_back_to_oracle_defaults() {
+        // What an older build, or a hand-edited file, might leave behind.
+        let config: Config =
+            serde_json::from_str(r#"{ "settings": { "theme": "dark" } }"#).unwrap();
+
+        assert_eq!(config.settings.theme, Theme::Dark, "a stated field must win");
+        // These are the ones that used to come back as the *type's* default — an empty
+        // list and false — silently turning a working install into an inert one.
+        assert_eq!(config.settings.health_interval_secs, 30);
+        assert!(config.settings.autostart_projects);
+        assert!(config.settings.minimise_to_tray);
+        assert_eq!(config.settings.panel_shortcut, "CmdOrCtrl+Shift+Space");
+        assert_eq!(config.settings.scan_roots, default_scan_roots());
+    }
+
+    #[test]
+    fn an_explicitly_empty_list_is_respected() {
+        // Defaulting must not resurrect a setting the user deliberately cleared.
+        let config: Config =
+            serde_json::from_str(r#"{ "settings": { "scanRoots": [] } }"#).unwrap();
+
+        assert!(config.settings.scan_roots.is_empty());
     }
 
     #[test]

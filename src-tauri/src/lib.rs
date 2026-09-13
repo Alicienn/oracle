@@ -103,16 +103,21 @@ pub fn run() {
             let loaded = config::load();
             let start_hidden = loaded.config.settings.start_hidden || autostart::launched_hidden();
 
+            // Must happen before any window exists. A webview starts loading — and can
+            // invoke a command — the moment it is created, so a window declared in
+            // tauri.conf.json races this line and intermittently fails with
+            // "state not managed". Creating the windows here, by hand, removes the race.
             app.manage(Arc::new(AppState::new(loaded, runner)));
+
+            let main = build_main_window(app)?;
+            build_panel_window(app)?;
 
             apply_window_effects(&handle);
             tray::build(&handle)?;
             register_shortcut(&handle);
 
             if !start_hidden {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                }
+                let _ = main.show();
             }
 
             tasks::spawn_metrics_loop(handle.clone());
@@ -156,6 +161,43 @@ pub fn run() {
                 }
             }
         });
+}
+
+/// The application window.
+///
+/// Undecorated and transparent so the custom title bar and the glass can take over, and
+/// hidden until `setup` decides whether this launch should show it.
+fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("Oracle")
+        .inner_size(1240.0, 820.0)
+        .min_inner_size(960.0, 640.0)
+        .center()
+        .resizable(true)
+        .decorations(false)
+        .transparent(true)
+        .shadow(true)
+        .visible(false)
+        .build()
+}
+
+/// The floating tray panel.
+///
+/// Kept out of the taskbar and above everything else: it behaves like a popover, not like a
+/// second application window.
+fn build_panel_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(app, "panel", tauri::WebviewUrl::App("panel.html".into()))
+        .title("Oracle Panel")
+        .inner_size(400.0, 620.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .focused(false)
+        .build()
 }
 
 /// Applies the native backdrop so the CSS glass has something real to refract.

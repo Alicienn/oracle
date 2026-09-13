@@ -86,9 +86,9 @@ async function main() {
   mkdirSync(outDir, { recursive: true });
   const mark = await stripGround();
 
-  // The source `tauri icon` regenerates the whole set from. Nearly edge to edge, and fully
+  // The source `tauri icon` regenerates the whole set from. Full bleed, and fully
   // transparent, so no white tile survives anywhere.
-  await sharp(await square(mark, 1024, 0.96)).toFile(resolve(root, "assets/icon-source.png"));
+  await sharp(await square(mark, 1024, 1)).toFile(resolve(root, "assets/icon-source.png"));
 
   for (const size of [16, 20, 24, 32, 48, 64, 256]) {
     await sharp(await square(mark, size, 0.94)).toFile(resolve(outDir, `tray-${size}.png`));

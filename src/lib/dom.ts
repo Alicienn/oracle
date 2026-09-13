@@ -41,12 +41,23 @@ export function svg(markup: string): SVGElement {
   return wrapper;
 }
 
-/** Parses a full SVG string into a live node. Used for the icon set. */
-export function icon(markup: string, className?: string): SVGElement {
+/**
+ * Parses a full SVG string into a live node. Used for the icon set.
+ *
+ * An intrinsic size is stamped on every icon. Without one an inline SVG has no natural
+ * dimensions and stretches to whatever the nearest CSS rule says — which is how a 14px
+ * button glyph ends up rendering at 52px because an ancestor styled `svg`. CSS still wins
+ * over the attribute wherever a component wants a different size.
+ */
+export function icon(markup: string, className?: string, size = 16): SVGElement {
   const template = document.createElement("template");
   template.innerHTML = markup.trim();
+
   const node = template.content.firstElementChild as SVGElement;
+  node.setAttribute("width", String(size));
+  node.setAttribute("height", String(size));
   if (className) node.setAttribute("class", className);
+
   return node;
 }
 

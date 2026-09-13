@@ -20,38 +20,7 @@
         ]
       }
     },
-    "windows": [
-      {
-        "label": "main",
-        "title": "Oracle",
-        "width": 1240,
-        "height": 820,
-        "minWidth": 960,
-        "minHeight": 640,
-        "center": true,
-        "resizable": true,
-        "decorations": false,
-        "transparent": true,
-        "shadow": true,
-        "visible": false,
-        "dragDropEnabled": true
-      },
-      {
-        "label": "panel",
-        "title": "Oracle Panel",
-        "url": "panel.html",
-        "width": 400,
-        "height": 620,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "shadow": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false,
-        "focus": false
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": true,
