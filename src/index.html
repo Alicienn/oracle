@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oracle</title>
+    <link rel="stylesheet" href="./styles/tokens.css" />
+    <link rel="stylesheet" href="./styles/glass.css" />
+    <link rel="stylesheet" href="./styles/app.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="titlebar" data-drag-region>
+        <div class="titlebar__brand" id="brand">Oracle</div>
+        <div class="titlebar__spacer"></div>
+        <div class="window-controls" id="window-controls"></div>
+      </header>
+
+      <div class="shell" id="shell" data-detail="closed">
+        <nav class="rail" id="rail" aria-label="Projects"></nav>
+
+        <main class="column">
+          <div class="toolbar">
+            <div class="search" id="search"></div>
+            <div class="toolbar__controls" id="toolbar-controls"></div>
+          </div>
+          <div class="list" id="list" data-view="list"></div>
+        </main>
+
+        <aside class="detail" id="detail" aria-label="Project details"></aside>
+      </div>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

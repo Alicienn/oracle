@@ -1,0 +1,168 @@
+/*
+ * Liquid glass.
+ *
+ * Three stacked layers, which is what separates this from ordinary glassmorphism:
+ *
+ *   1. Refraction  — an SVG displacement filter in `backdrop-filter`. This is the layer
+ *                    `blur()` cannot provide: it moves the backdrop's pixels sideways, the
+ *                    way real glass bends light. Without it the effect reads as frosted
+ *                    plastic.
+ *   2. Illumination — blur and saturation, plus a tint, so the surface has a body of its own.
+ *   3. Specular     — a bright rim that is strongest at the top-left, plus a highlight that
+ *                    follows the pointer on interactive surfaces.
+ *
+ * The refraction filter is the expensive one. `html[data-glass]` and the frame-rate probe in
+ * glass.ts drop it first when the machine cannot keep up.
+ */
+
+.glass {
+  position: relative;
+  isolation: isolate;
+  background: var(--glass-tint);
+  border-radius: var(--r-lg);
+  box-shadow:
+    var(--shadow-near),
+    var(--shadow-far),
+    inset 0 0 0 1px var(--glass-edge-dim);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition:
+    box-shadow var(--t-hover) var(--spring),
+    background var(--t-hover) var(--spring),
+    transform var(--t-hover) var(--spring);
+}
+
+/* Refraction, only where the device can afford it. */
+:root[data-glass="full"] .glass,
+:root:not([data-glass]) .glass {
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) url(#lg-refract-md);
+}
+
+:root[data-glass="full"] .glass--fine,
+:root:not([data-glass]) .glass--fine {
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.5)) saturate(var(--glass-saturate))
+    url(#lg-refract-sm);
+}
+
+:root[data-glass="full"] .glass--heavy,
+:root:not([data-glass]) .glass--heavy {
+  backdrop-filter: blur(calc(var(--glass-blur) * 1.4)) saturate(var(--glass-saturate))
+    url(#lg-refract-lg);
+}
+
+/*
+ * The specular rim.
+ *
+ * A conic gradient masked to a one-pixel ring: bright where light would catch the top-left
+ * bevel, fading to nothing at the bottom-right. `mask-composite: exclude` hollows out the
+ * middle so only the border itself is painted.
+ */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from 210deg,
+    transparent 0deg,
+    var(--specular) 40deg,
+    transparent 130deg,
+    transparent 220deg,
+    var(--glass-edge-dim) 280deg,
+    transparent 340deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/*
+ * The pointer highlight.
+ *
+ * `--mx` and `--my` are written by glass.ts on pointer move, throttled to one write per
+ * frame. `plus-lighter` keeps it additive so it brightens the glass rather than washing it
+ * out, and the whole layer is invisible until the pointer is actually over the element.
+ */
+.glass--live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    180px circle at var(--mx, 50%) var(--my, 0%),
+    var(--specular),
+    transparent 70%
+  );
+  opacity: 0;
+  mix-blend-mode: plus-lighter;
+  transition: opacity var(--t-hover) var(--spring);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.glass--live:hover::after {
+  opacity: 0.5;
+}
+
+/* Raised variants -------------------------------------------------------- */
+
+.glass--raised {
+  background: var(--glass-tint-strong);
+  box-shadow:
+    var(--shadow-lift-near),
+    var(--shadow-lift-far),
+    inset 0 0 0 1px var(--glass-edge-dim);
+}
+
+.glass--sunken {
+  background: var(--glass-tint-faint);
+  box-shadow: inset 0 1px 3px rgba(26, 24, 21, 0.07), inset 0 0 0 1px var(--line);
+}
+
+/*
+ * Press feedback.
+ *
+ * Glass under a finger should compress slightly, not just change colour. 0.985 is small
+ * enough to feel physical rather than cartoonish.
+ */
+.glass--live:active {
+  transform: scale(0.985);
+  transition-duration: 80ms;
+}
+
+/*
+ * While a window is being dragged or resized, the displacement filter is the single most
+ * expensive thing on screen. glass.ts sets this attribute for the duration of the gesture.
+ */
+:root[data-gesture="active"] .glass,
+:root[data-gesture="active"] .glass--fine,
+:root[data-gesture="active"] .glass--heavy {
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+:root[data-gesture="active"] .glass::before,
+:root[data-gesture="active"] .glass--live::after {
+  display: none;
+}
+
+/*
+ * The filter host. The SVG carrying the filter definitions must be in the document and
+ * rendered, but never visible; `display: none` would stop the filters resolving in Chromium,
+ * so it is hidden by size instead.
+ */
+#lg-filters {
+  position: fixed;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  opacity: 0;
+}

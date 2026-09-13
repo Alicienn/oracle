@@ -1,0 +1,198 @@
+/*
+ * Design tokens.
+ *
+ * Every colour is defined once on :root in its light form. The dark theme redefines the
+ * same names and nothing else, so no component ever needs to know which theme is active.
+ * Two selectors carry dark: the media query for "follow the system", and the attribute for
+ * an explicit choice, which must win in both directions.
+ */
+
+:root {
+  /* Brand ---------------------------------------------------------------- */
+  --accent: #c15f3c;
+  --accent-bright: #d97449;
+  --accent-deep: #a44c2d;
+  --accent-wash: rgba(193, 95, 60, 0.12);
+
+  /* Ground and ink -------------------------------------------------------- */
+  --paper: #f4f3ee;
+  --paper-deep: #eae8e0;
+  --ink: #1a1815;
+  --ink-soft: #4a453d;
+  --muted: #8d887c;
+  --muted-soft: #b1ada1;
+  --line: rgba(26, 24, 21, 0.1);
+  --line-strong: rgba(26, 24, 21, 0.18);
+
+  /* Status ---------------------------------------------------------------- */
+  --ok: #5b8c6e;
+  --warn: #c99a2e;
+  --danger: #b3442e;
+  --idle: #b1ada1;
+
+  /* Glass ----------------------------------------------------------------- */
+  --glass-tint: rgba(255, 255, 255, 0.55);
+  --glass-tint-strong: rgba(255, 255, 255, 0.72);
+  --glass-tint-faint: rgba(255, 255, 255, 0.34);
+  --glass-edge: rgba(255, 255, 255, 0.85);
+  --glass-edge-dim: rgba(255, 255, 255, 0.28);
+  --glass-blur: 24px;
+  --glass-saturate: 180%;
+  --specular: rgba(255, 255, 255, 0.7);
+
+  /* Depth ------------------------------------------------------------------
+   * Two tiers on purpose: a tight shadow anchors the element to the surface
+   * beneath it, a wide one separates the plane it floats on.                */
+  --shadow-near: 0 1px 2px rgba(26, 24, 21, 0.08);
+  --shadow-far: 0 18px 48px -12px rgba(26, 24, 21, 0.22);
+  --shadow-lift-near: 0 2px 6px rgba(26, 24, 21, 0.1);
+  --shadow-lift-far: 0 28px 64px -16px rgba(26, 24, 21, 0.3);
+
+  /* Geometry -------------------------------------------------------------- */
+  --r-xs: 6px;
+  --r-sm: 9px;
+  --r-md: 13px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --r-full: 999px;
+
+  --gap-1: 4px;
+  --gap-2: 8px;
+  --gap-3: 12px;
+  --gap-4: 16px;
+  --gap-5: 24px;
+  --gap-6: 32px;
+
+  /* Motion -----------------------------------------------------------------
+   * A spring-shaped curve everywhere. Linear easing is what makes an interface
+   * feel like a document rather than a physical object.                      */
+  --spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --spring-soft: cubic-bezier(0.4, 0.6, 0.2, 1);
+  --t-hover: 180ms;
+  --t-panel: 420ms;
+  --t-page: 260ms;
+
+  /* Typography ------------------------------------------------------------ */
+  --font: "Inter", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, "Consolas", monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 19px;
+  --text-xl: 26px;
+
+  color-scheme: light;
+}
+
+/* Dark, when the system asks for it and the user has not overridden. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: #d1714c;
+    --accent-bright: #e08a63;
+    --accent-deep: #b2573a;
+    --accent-wash: rgba(209, 113, 76, 0.16);
+
+    --paper: #141310;
+    --paper-deep: #0d0c0a;
+    --ink: #f2efe9;
+    --ink-soft: #c3bdb1;
+    --muted: #8a8377;
+    --muted-soft: #6a6459;
+    --line: rgba(255, 255, 255, 0.09);
+    --line-strong: rgba(255, 255, 255, 0.16);
+
+    --ok: #77ad8c;
+    --warn: #d8ae4a;
+    --danger: #cf5f47;
+    --idle: #6a6459;
+
+    --glass-tint: rgba(40, 37, 32, 0.58);
+    --glass-tint-strong: rgba(48, 44, 38, 0.76);
+    --glass-tint-faint: rgba(40, 37, 32, 0.34);
+    --glass-edge: rgba(255, 255, 255, 0.16);
+    --glass-edge-dim: rgba(255, 255, 255, 0.06);
+    --specular: rgba(255, 255, 255, 0.24);
+
+    --shadow-near: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-far: 0 18px 48px -12px rgba(0, 0, 0, 0.6);
+    --shadow-lift-near: 0 2px 6px rgba(0, 0, 0, 0.45);
+    --shadow-lift-far: 0 28px 64px -16px rgba(0, 0, 0, 0.7);
+
+    color-scheme: dark;
+  }
+}
+
+/* Dark, chosen explicitly. Must repeat the block so the toggle beats the system. */
+:root[data-theme="dark"] {
+  --accent: #d1714c;
+  --accent-bright: #e08a63;
+  --accent-deep: #b2573a;
+  --accent-wash: rgba(209, 113, 76, 0.16);
+
+  --paper: #141310;
+  --paper-deep: #0d0c0a;
+  --ink: #f2efe9;
+  --ink-soft: #c3bdb1;
+  --muted: #8a8377;
+  --muted-soft: #6a6459;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  --ok: #77ad8c;
+  --warn: #d8ae4a;
+  --danger: #cf5f47;
+  --idle: #6a6459;
+
+  --glass-tint: rgba(40, 37, 32, 0.58);
+  --glass-tint-strong: rgba(48, 44, 38, 0.76);
+  --glass-tint-faint: rgba(40, 37, 32, 0.34);
+  --glass-edge: rgba(255, 255, 255, 0.16);
+  --glass-edge-dim: rgba(255, 255, 255, 0.06);
+  --specular: rgba(255, 255, 255, 0.24);
+
+  --shadow-near: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-far: 0 18px 48px -12px rgba(0, 0, 0, 0.6);
+  --shadow-lift-near: 0 2px 6px rgba(0, 0, 0, 0.45);
+  --shadow-lift-far: 0 28px 64px -16px rgba(0, 0, 0, 0.7);
+
+  color-scheme: dark;
+}
+
+/*
+ * Glass intensity. `full` is the default and needs no class. The other two are set on
+ * <html> from settings, and are also what the frame-rate probe falls back to.
+ */
+:root[data-glass="reduced"] {
+  --glass-blur: 16px;
+  --glass-saturate: 140%;
+}
+
+:root[data-glass="opaque"] {
+  --glass-blur: 0px;
+  --glass-saturate: 100%;
+  --glass-tint: var(--paper);
+  --glass-tint-strong: var(--paper);
+  --glass-tint-faint: var(--paper);
+}
+
+/*
+ * Users who asked the OS for less motion get none of it. Refraction also goes, since the
+ * distortion itself reads as movement to some people.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-hover: 0ms;
+    --t-panel: 0ms;
+    --t-page: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
