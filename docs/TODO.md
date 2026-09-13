@@ -2,19 +2,19 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-09-13 — the Tauri build is complete and shipped. Work has moved to the
-native Rust interface on branch `rust-ui`; its plan and progress live in
-[RUST-UI-REWRITE.md](RUST-UI-REWRITE.md).
+Last updated: 2026-09-13 — the Tauri build is complete and shipped, and is now the only
+build. The native Rust interface that lived in `src-rust/` has been removed; it is in the
+history up to the commit that deleted it if it is ever wanted back.
 
 ## Current state
 
 | Build | Where | State |
 |---|---|---|
-| Tauri (WebView2) | `main`, `src-tauri/` + `src/` | Complete, installer built, 70 tests |
-| Native Rust | `rust-ui`, `src-rust/` | In progress, 107 tests, no installer yet |
+| Tauri (WebView2) | `src-tauri/` + `src/` | Complete, installer built, 83 tests |
 
-The native build exists because the Tauri one costs **508 MB of private memory** on this
-machine — measured, after two wrong estimates. The native one currently costs 320 MB.
+Resident memory is being worked on within this build rather than by replacing it: the tray
+panel's webview is now created on demand instead of living hidden for the session, and the
+frontend no longer keeps log buffers for projects nobody is looking at.
 
 ---
 
