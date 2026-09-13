@@ -560,7 +560,7 @@ async fn kill_tree(pid: u32, force: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::LocalTarget;
+    use crate::core::config::model::LocalTarget;
     use std::path::PathBuf;
     use std::sync::Mutex as StdMutex;
 

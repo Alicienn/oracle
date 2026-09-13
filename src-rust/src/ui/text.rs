@@ -254,6 +254,10 @@ const UI_FONTS: &[&str] = &[
     "segoeui.ttf",
     "segoeuib.ttf",
     "segoeuisl.ttf",
+    // Segoe UI carries no geometric shapes — a play triangle or a gear renders as tofu
+    // without this. Fallback only searches fonts that are in the database, so trimming the
+    // database to two families also trimmed away every symbol.
+    "seguisym.ttf",
 ];
 
 const MONO_FONTS: &[&str] = &[

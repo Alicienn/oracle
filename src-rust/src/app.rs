@@ -1,7 +1,8 @@
 //! The application: state, event loop, and the layout of every screen.
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use glisten_glass::Blur;
 use glisten_motion::{Animated, Motion};
@@ -11,8 +12,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::diag;
 use crate::core::config::{self, model::*};
-use crate::core::runner::ProjectStatus;
+use crate::core::monitor::{Monitor, Sample};
+use crate::core::runner::{ProcessManager, ProjectStatus, RunnerEvent};
 use crate::ui::input::{id, Input, Key};
 use crate::ui::paint::{Frame, Rect};
 use crate::ui::renderer::Renderer;
@@ -41,11 +44,27 @@ pub struct Oracle {
 
     /// Width of the detail pane, animated so opening it slides rather than snaps.
     detail: Animated<f32>,
+    /// How far the project list is scrolled, in logical pixels.
+    scroll: f32,
+
+    /// Owns the async runtime the supervisor spawns onto. Dropping it would kill every
+    /// child, so it lives exactly as long as the application does.
+    runtime: tokio::runtime::Runtime,
+    runner: Arc<ProcessManager>,
+    /// Status per project, kept in step by draining `events` each frame.
+    statuses: HashMap<String, ProjectStatus>,
+    events: std::sync::mpsc::Receiver<RunnerEvent>,
+
+    monitor: Monitor,
+    usage: HashMap<String, Sample>,
+    last_sample: Instant,
 
     started: Instant,
     last_frame: Instant,
     /// Set while anything is still moving, so the loop can idle when nothing is.
     needs_frame: bool,
+    /// Set by the close button; acted on once the frame it was clicked in has finished.
+    closing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +93,22 @@ impl Default for Oracle {
         let loaded = config::load();
         probe("after config load");
 
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("oracle")
+            .build()
+            .expect("Oracle could not start its async runtime");
+
+        // The supervisor reports through a plain closure. Sending into a channel keeps every
+        // status change on the interface thread, where the frame that draws it lives.
+        let (sender, events) = std::sync::mpsc::channel();
+        let runner = Arc::new(ProcessManager::new(
+            Arc::new(move |event| {
+                let _ = sender.send(event);
+            }),
+            runtime.handle().clone(),
+        ));
+
         Self {
             window: None,
             renderer: None,
@@ -91,9 +126,18 @@ impl Default for Oracle {
             detail: Animated::new(0.0)
                 .with_motion(Motion::Spring(theme::motion::PANEL))
                 .with_epsilon(0.4),
+            scroll: 0.0,
+            runtime,
+            runner,
+            statuses: HashMap::new(),
+            events,
+            monitor: Monitor::new(),
+            usage: HashMap::new(),
+            last_sample: Instant::now(),
             started: Instant::now(),
             last_frame: Instant::now(),
             needs_frame: true,
+            closing: false,
         }
     }
 }
@@ -138,8 +182,89 @@ impl Oracle {
             .unwrap_or_else(|| parse_hex(project.kind.accent()).unwrap_or(self.palette.accent))
     }
 
+    /// Drains status changes and resamples resource usage.
+    ///
+    /// Both run from the frame rather than on their own timers: the interface is the only
+    /// consumer, so there is nothing to gain from updating state nobody is about to draw.
+    fn poll(&mut self) {
+        while let Ok(event) = self.events.try_recv() {
+            if let RunnerEvent::Status { project_id, status } = event {
+                self.statuses.insert(project_id, status);
+            }
+            // Log lines stay in the supervisor's ring buffer; the log pane reads them there.
+        }
+
+        // Sampling walks every process on the machine, so it keeps its own once-a-second
+        // cadence regardless of how often the window redraws.
+        if self.last_sample.elapsed() >= Duration::from_secs(1) {
+            self.last_sample = Instant::now();
+
+            let roots: Vec<(String, u32)> = self
+                .runner
+                .running()
+                .into_iter()
+                .map(|info| (info.project_id, info.pid))
+                .collect();
+
+            self.usage = self
+                .monitor
+                .sample(&roots)
+                .into_iter()
+                .map(|usage| (usage.project_id, usage.current))
+                .collect();
+        }
+    }
+
+    fn status_of(&self, project_id: &str) -> ProjectStatus {
+        self.statuses
+            .get(project_id)
+            .copied()
+            .unwrap_or(ProjectStatus::Stopped)
+    }
+
+    /// Starts a project, or stops it if it is already up.
+    fn toggle(&mut self, project_id: &str) {
+        let live = matches!(
+            self.status_of(project_id),
+            ProjectStatus::Running | ProjectStatus::Starting
+        );
+
+        if live {
+            // Stopping waits on a process tree unwinding, which must not block the frame.
+            let runner = self.runner.clone();
+            let id = project_id.to_string();
+            diag!("stopping {id}, running: {:?}", runner.running());
+            self.runtime.spawn(async move {
+                match runner.stop(&id).await {
+                    Ok(()) => probe("stop returned Ok"),
+                    Err(err) => diag!("stop failed: {err}"),
+                }
+            });
+            self.statuses
+                .insert(project_id.to_string(), ProjectStatus::Stopped);
+            return;
+        }
+
+        let Some(project) = self.config.project(project_id).cloned() else {
+            return;
+        };
+
+        match self.runner.start(&project) {
+            Ok(_) => {
+                self.statuses
+                    .insert(project_id.to_string(), ProjectStatus::Starting);
+            }
+            Err(err) => {
+                self.statuses
+                    .insert(project_id.to_string(), ProjectStatus::Crashed);
+                eprintln!("Oracle could not start {}: {err}", project.name);
+            }
+        }
+    }
+
     fn build(&mut self, width: f32, height: f32, dt: f32) {
         self.frame.clear();
+        self.poll();
 
         let palette = self.palette;
         self.detail
@@ -147,7 +272,7 @@ impl Oracle {
         self.detail.tick(dt);
         let detail_width = self.detail.get();
 
-        self.titlebar(width);
+        self.titlebar(width, dt);
 
         let body_top = TITLEBAR;
         let body_height = height - TITLEBAR;
@@ -177,7 +302,7 @@ impl Oracle {
             .rule(RAIL, body_top, body_height, true, palette.line);
     }
 
-    fn titlebar(&mut self, width: f32) {
+    fn titlebar(&mut self, width: f32, dt: f32) {
         let palette = self.palette;
 
         // The mark, drawn from the same three circles the logo was built from.
@@ -191,7 +316,61 @@ impl Oracle {
             Run::new("Oracle", gap::LG + 26.0, cy - 9.0, text::BASE, palette.ink).weight(620),
         );
 
-        let _ = width;
+        // Window controls, in the Windows order and at the Windows size.
+        let window = self.window.clone();
+        let controls: [(&str, &str); 3] = [
+            ("minimise", "\u{2500}"),
+            ("maximise", "\u{25A1}"),
+            ("close", "\u{2715}"),
+        ];
+
+        for (index, (key, glyph)) in controls.iter().enumerate() {
+            let rect: Rect = [
+                width - 46.0 * (3 - index) as f32,
+                0.0,
+                46.0,
+                TITLEBAR - 1.0,
+            ];
+            let response = self.input.interact(id("window", key), rect, dt);
+
+            if response.hover > 0.01 {
+                let tint = if *key == "close" {
+                    alpha_of(palette.danger, response.hover)
+                } else {
+                    alpha_of(palette.line, response.hover)
+                };
+                self.frame.fill(rect, tint, 0.0);
+            }
+
+            let ink = if *key == "close" && response.hover > 0.5 {
+                [1.0, 1.0, 1.0, 1.0]
+            } else {
+                palette.muted
+            };
+            self.frame
+                .centred(*glyph, rect[0] + 23.0, rect[1] + 12.0, text::SM, ink, 400);
+
+            if response.clicked {
+                if let Some(window) = window.as_ref() {
+                    match *key {
+                        "minimise" => window.set_minimized(true),
+                        "maximise" => window.set_maximized(!window.is_maximized()),
+                        _ => self.closing = true,
+                    }
+                }
+            }
+        }
+
+        // Anywhere else on the bar drags the window. Started from the press rather than
+        // from a click, so the drag begins on the same frame the button goes down.
+        let drag: Rect = [0.0, 0.0, width - 138.0, TITLEBAR];
+        if self.input.interact(id("window", "drag"), drag, dt).pressed
+            && self.input.just_pressed
+        {
+            if let Some(window) = window.as_ref() {
+                let _ = window.drag_window();
+            }
+        }
     }
 
     fn rail(&mut self, top: f32, height: f32, dt: f32) {
@@ -204,7 +383,7 @@ impl Oracle {
                     p.id.clone(),
                     initials(&p.name),
                     self.accent_of(p),
-                    ProjectStatus::Stopped,
+                    self.status_of(&p.id),
                 )
             })
             .collect();
@@ -417,11 +596,20 @@ impl Oracle {
 
         let inner = x + gap::LG;
         let card_width = width - gap::LG * 2.0;
-        let mut cy = y;
+
+        // Scroll, clamped so the list cannot be flung past its own contents.
+        let content = projects.len() as f32 * 70.0;
+        let overflow = (content - height + gap::LG).max(0.0);
+        self.scroll = (self.scroll - self.input.scroll).clamp(0.0, overflow);
+
+        let mut cy = y - self.scroll;
 
         for project in &projects {
-            if cy > y + height {
-                break;
+            // Rows outside the viewport are skipped entirely, so a hundred projects cost
+            // the same as the dozen actually on screen.
+            if cy + 62.0 < y || cy > y + height {
+                cy += 70.0;
+                continue;
             }
 
             let rect: Rect = [inner, cy, card_width, 62.0];
@@ -456,42 +644,73 @@ impl Oracle {
                 Run::new(&project.name, tx, rect[1] + 13.0, text::BASE, palette.ink).weight(600),
             );
 
-            let meta = match (&project.local, &project.remote) {
-                (Some(local), _) => format!(
-                    "{} · {}",
-                    project.kind.label(),
-                    if local.command.is_empty() { "no command" } else { &local.command }
+            let status = self.status_of(&project.id);
+            let live = matches!(status, ProjectStatus::Running | ProjectStatus::Starting);
+
+            // A running project reports what it costs; a stopped one reports what it is.
+            let meta = match (live, self.usage.get(&project.id)) {
+                (true, Some(sample)) => format!(
+                    "{} · {} · {}",
+                    status_label(status),
+                    percent(sample.cpu),
+                    bytes(sample.memory)
                 ),
-                (None, Some(remote)) => format!("{} · {}", project.kind.label(), remote.url),
-                _ => project.kind.label().to_string(),
+                (true, None) => status_label(status).to_string(),
+                _ => match (&project.local, &project.remote) {
+                    (Some(local), _) => format!(
+                        "{} · {}",
+                        project.kind.label(),
+                        if local.command.is_empty() {
+                            "no command"
+                        } else {
+                            &local.command
+                        }
+                    ),
+                    (None, Some(remote)) => format!("{} · {}", project.kind.label(), remote.url),
+                    _ => project.kind.label().to_string(),
+                },
             };
             self.frame
                 .label(meta, tx, rect[1] + 33.0, text::SM, palette.muted);
 
-            // Play control.
+            self.frame.dot(
+                [rect[0] + rect[2] - 62.0, rect[1] + 31.0],
+                8.0,
+                status_colour(status, &palette),
+            );
+
+            // Play and stop share one control, as they did on the web.
             let play: Rect = [rect[0] + rect[2] - 42.0, rect[1] + 16.0, 30.0, 30.0];
             let play_response = self.input.interact(id("play", &project.id), play, dt);
+            let lit = play_response.hover > 0.01 || live;
+
             self.frame.fill(
                 play,
-                if play_response.hover > 0.01 {
-                    palette.accent
+                if lit {
+                    if live {
+                        palette.accent
+                    } else {
+                        palette.accent_bright
+                    }
                 } else {
                     alpha_of(palette.accent, 0.18)
                 },
                 radius::SM,
             );
             self.frame.centred(
-                "\u{25B6}",
+                if live { "\u{25A0}" } else { "\u{25B6}" },
                 play[0] + 15.0,
                 play[1] + 6.0,
                 text::SM,
-                if play_response.hover > 0.01 {
-                    [1.0, 1.0, 1.0, 1.0]
-                } else {
-                    palette.accent
-                },
+                if lit { [1.0, 1.0, 1.0, 1.0] } else { palette.accent },
                 500,
             );
+
+            if play_response.clicked {
+                let project_id = project.id.clone();
+                diag!("play clicked on {}", project.name);
+                self.toggle(&project_id);
+            }
 
             if response.clicked {
                 self.selected = if selected { None } else { Some(project.id.clone()) };
@@ -591,9 +810,35 @@ impl ApplicationHandler for Oracle {
             return;
         }
 
+        // Fit the preferred size to the display rather than assuming it fits.
+        //
+        // 1240x820 logical is 1860x1230 physical on a 150% display, which is taller than a
+        // 1080p screen — the window opened with its own controls off the bottom right. The
+        // margin leaves room for the taskbar.
+        let (preferred_width, preferred_height) = event_loop
+            .primary_monitor()
+            .map(|monitor| {
+                let scale = monitor.scale_factor();
+                let size = monitor.size();
+                (
+                    (size.width as f64 / scale - 120.0).min(1240.0).max(960.0),
+                    (size.height as f64 / scale - 120.0).min(820.0).max(600.0),
+                )
+            })
+            .unwrap_or((1100.0, 740.0));
+
         let attributes = Window::default_attributes()
             .with_title("Oracle")
-            .with_inner_size(winit::dpi::LogicalSize::new(1240.0, 820.0));
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                preferred_width,
+                preferred_height,
+            ))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(860.0, 560.0))
+            // Oracle draws its own title bar, so the system must not draw one too.
+            .with_decorations(false)
+            // The window is transparent so the rounded corners of the shell show the
+            // desktop rather than a square of paper.
+            .with_transparent(true);
 
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
@@ -659,6 +904,10 @@ impl ApplicationHandler for Oracle {
             }
 
             WindowEvent::MouseInput { state, button, .. } if button == MouseButton::Left => {
+                diag!(
+                    "mouse {state:?} at {:.0},{:.0} in_window={}",
+                    self.input.pointer[0], self.input.pointer[1], self.input.pointer_in_window
+                );
                 match state {
                     ElementState::Pressed => {
                         self.input.down = true;
@@ -727,6 +976,15 @@ impl ApplicationHandler for Oracle {
                 // that switching the wash off makes the app genuinely idle.
                 self.needs_frame = self.input.animating() || !self.detail.is_settled() || true;
                 self.input.end_frame();
+
+                if self.closing {
+                    // Children outlive their parent on Windows unless they are killed
+                    // explicitly, so nothing Oracle started is left running with no way to
+                    // reach it.
+                    let runner = self.runner.clone();
+                    self.runtime.block_on(async move { runner.stop_all().await });
+                    event_loop.exit();
+                }
             }
 
             _ => {}
@@ -755,6 +1013,43 @@ fn status_colour(status: ProjectStatus, palette: &Palette) -> Colour {
         ProjectStatus::Starting | ProjectStatus::Unhealthy => palette.warn,
         ProjectStatus::Crashed => palette.danger,
         ProjectStatus::Stopped => palette.idle,
+    }
+}
+
+fn status_label(status: ProjectStatus) -> &'static str {
+    match status {
+        ProjectStatus::Running => "Running",
+        ProjectStatus::Starting => "Starting",
+        ProjectStatus::Unhealthy => "Not responding",
+        ProjectStatus::Crashed => "Crashed",
+        ProjectStatus::Stopped => "Stopped",
+    }
+}
+
+/// CPU as a percentage of one core, so a project pinning four reads 400%.
+fn percent(value: f32) -> String {
+    if value < 10.0 {
+        format!("{value:.1}%")
+    } else {
+        format!("{}%", value.round())
+    }
+}
+
+/// Binary units, because that is what Task Manager reports and a mismatch reads as a bug.
+fn bytes(value: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut scaled = value as f64;
+    let mut unit = 0;
+
+    while scaled >= 1024.0 && unit < UNITS.len() - 1 {
+        scaled /= 1024.0;
+        unit += 1;
+    }
+
+    if scaled >= 100.0 || unit <= 1 {
+        format!("{scaled:.0} {}", UNITS[unit])
+    } else {
+        format!("{scaled:.1} {}", UNITS[unit])
     }
 }
 
@@ -838,13 +1133,31 @@ mod tests {
     }
 }
 
-/// Reports this process's resident memory at a point in startup.
+/// Formats and prints a diagnostic only when `ORACLE_DIAG` is set, so the formatting cost
+/// is not paid on every frame of a normal run.
+#[macro_export]
+macro_rules! diag {
+    ($($arg:tt)*) => {
+        if $crate::app::diagnostics() {
+            $crate::app::probe(&format!($($arg)*));
+        }
+    };
+}
+
+/// Whether diagnostics are on. Read once: the environment does not change under us.
+pub fn diagnostics() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("ORACLE_DIAG").is_some())
+}
+
+/// Prints a stage with this process's resident memory beside it.
 ///
 /// Set `ORACLE_DIAG=1` to see it. Kept rather than deleted because it is what found the
-/// 307 MB the graphics driver was reserving at device creation, and the next surprise will
-/// want the same tool.
+/// 307 MB the graphics driver reserves at device creation — a number no amount of reading
+/// the code would have revealed — and the next surprise will want the same tool.
 pub fn probe(stage: &str) {
-    if std::env::var_os("ORACLE_DIAG").is_none() {
+    if !diagnostics() {
         return;
     }
 

@@ -121,7 +121,7 @@ fn describe(err: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::RemoteCheck;
+    use crate::core::config::model::RemoteCheck;
 
     fn target(url: &str, expect: Vec<u16>) -> RemoteTarget {
         RemoteTarget {
