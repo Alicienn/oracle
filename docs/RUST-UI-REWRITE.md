@@ -1,6 +1,7 @@
 # Rewriting Oracle's UI in pure Rust — cost and plan
 
-Status: **proposal only, not implemented.** Written 2026-09-13 at the request of the owner.
+Status: **in progress on branch `rust-ui`.** Written 2026-09-13, revised the same day after
+the memory figures in it turned out to be wrong.
 
 This estimates what it would take to drop WebView2 and render Oracle's interface directly
 with Rust and a GPU, and lists the work in order.
@@ -23,8 +24,41 @@ The backend is untouched by this work. It already knows nothing about Tauri beyo
 health checker are pure functions over data. **Roughly 3,900 of the 4,328 backend lines port
 over unchanged.** That is the single biggest thing working in favour of a rewrite.
 
-Current shipping numbers, for comparison later: **5.9 MB binary, 2.1 MB installer, ~42 MB
-resident, 68→70 unit tests.**
+Current shipping numbers, for comparison later:
+
+| | |
+|---|---|
+| Binary | 5.9 MB |
+| Installer | 2.1 MB |
+| **Memory, working set** | **845.5 MB across 8 processes** |
+| **Memory, private bytes** | **508.2 MB** |
+| Unit tests | 70 |
+
+### On that memory figure
+
+An earlier version of this document said "~42 MB resident" and used it to argue the rewrite
+was not worth doing. That number was wrong, and wrong in an embarrassing way: it measured
+`oracle.exe` alone — the exact mistake `monitor.rs` exists to prevent, which is why that
+module sums a whole process tree instead of a root PID.
+
+Measured properly:
+
+```
+msedgewebview2 (GPU)   305.5 MB working set   270.0 MB private
+oracle.exe             110.1 MB                65.1 MB
+6 further webview2     429.9 MB               173.1 MB
+-----------------------------------------------------------
+total (8 processes)    845.5 MB               508.2 MB
+```
+
+A second claim in the earlier version was also wrong: that WebView2 shares pages with other
+Edge processes, so the marginal cost is smaller than it looks. There are 19 other
+`msedgewebview2` processes on this machine from other applications, but Oracle's tree has
+**its own GPU process at 270 MB private**. Nothing is shared. The half-gigabyte is entirely
+Oracle's.
+
+For a tool whose purpose is to sit in the tray and watch what other processes consume, being
+the heaviest thing running is not a trade-off. It is a defect.
 
 ---
 
@@ -86,9 +120,10 @@ Being fair to the idea, not just to the status quo:
   and cheaper than the SVG `feDisplacementMap` currently used, and it would not need the
   frame-rate fallback or the disable-during-drag workaround.
 - **Startup.** No webview initialisation. Roughly 250 ms → under 100 ms.
-- **Memory.** ~42 MB → perhaps 25 MB, though WebView2 shares pages with any other Edge
-  process already running, so the marginal saving on a real desktop is smaller than the
-  number suggests.
+- **Memory.** 508 MB private → 30–60 MB. **This is the headline.** A wgpu application with a
+  font atlas and a handful of render targets lands in that range; there is no browser engine,
+  no JavaScript heap, no separate GPU process, no IPC layer. Roughly a tenfold reduction, and
+  the single strongest argument for doing this at all.
 - **No WebView2 dependency.** Marginal on Windows 11, where it ships with the OS.
 - **One language.** No IPC boundary, no duplicated types between `api.ts` and Rust. That is a
   real maintenance win and removes a whole class of bug.
@@ -115,13 +150,18 @@ The risk is not evenly spread. Phases R2 and R5 below are where a rewrite of thi
 usually stalls: the glass, because there is nothing to build on, and text input, because it
 is unglamorous and endless.
 
-**My recommendation: do not do this to ship Oracle.** The current UI meets every goal in the
-spec, at 35.9 KB of JavaScript with no framework. Do it if the goal is the craft — writing a
-glass renderer in WGSL is genuinely interesting work — but treat it as a separate project
-with its own reason to exist, not as a refactor of this one.
+**Revised recommendation: do it.**
 
-If the real motivation is the 42 MB of RAM or the WebView2 dependency, say so, because those
-have much cheaper answers than a rewrite.
+The first version of this document advised against, on the strength of a memory figure that
+was off by more than twelve times. With the real number — 508 MB of private bytes, none of it
+shared — the calculus is different. Oracle is meant to run all day in the tray and report on
+resource usage; costing half a gigabyte to do so undermines the premise of the application.
+
+The rest of the analysis still holds, and none of it is comfortable: the glass has nothing to
+build on, the widget set is long, text input with IME is a genuine pit, and the development
+loop gets much worse. **Phase R0 is therefore still a gate, not a formality.** If the glass
+spike does not match what the browser renders today, the honest outcome is to stop and accept
+the memory cost rather than ship something that looks worse.
 
 ---
 
@@ -132,9 +172,12 @@ into widgets.
 
 ### R0 — Decide and spike *(do this before anything else)*
 
-- [ ] **R0.S1** Pick the toolkit. `egui` for maintenance and momentum, `iced` for a retained
-      model closer to the current architecture, or raw `wgpu` + `winit` for full control of
-      the render graph.
+- [x] **R0.S1** ~~Pick the toolkit.~~ **`winit` + `wgpu` directly**, with `glyphon` and
+      `cosmic-text` for text. The glass needs control of the render graph — scene pass,
+      resolve, glass pass — which a framework's own compositor gets in the way of. `iced` has
+      not shipped in nine months; `egui` is immediate-mode, which fights the retained,
+      spring-driven motion this interface is built on. Text is the one part not worth writing
+      from scratch.
 - [ ] **R0.S2** **Spike the glass, standalone.** One window, one blurred and refracted panel
       over a moving background, measured at 60 fps on this machine. Nothing else.
 - [ ] **R0.S3** Compare the spike side by side with the current UI. **If it does not look at
