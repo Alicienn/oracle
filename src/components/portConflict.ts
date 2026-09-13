@@ -7,7 +7,8 @@
  */
 
 import type { PortConflict, ProjectView } from "../lib/api";
-import { h } from "../lib/dom";
+import { h, icon } from "../lib/dom";
+import { icons } from "../lib/icons";
 import { button } from "./common";
 import { closeModal, showModal } from "./modal";
 
@@ -34,21 +35,39 @@ export function askAboutPort(
       "div",
       null,
       h(
-        "p",
-        null,
-        `Port ${conflict.port} is already held by ${conflict.holder}, so ${project.name} cannot use it.`,
+        "div",
+        { class: "notice" },
+        h("span", { class: "notice__mark" }, icon(icons.alert)),
+        h(
+          "div",
+          null,
+          h("strong", null, `Port ${conflict.port} is taken`),
+          // One phrasing for both kinds of holder: an Oracle project answers with its name,
+          // anything else with a description of the process.
+          h("p", null, `Held by ${conflict.holder}.`),
+        ),
       ),
       conflict.suggestion !== null
         ? h(
-            "p",
-            { class: "field__hint" },
-            `Oracle can start it on port ${conflict.suggestion} instead. That applies to this run only — the project keeps ${conflict.port} in its settings, and the new port is passed to the command as PORT.`,
+            "div",
+            { class: "swap" },
+            h("div", { class: "swap__port" }, String(conflict.port), h("span", null, "in use")),
+            h("span", { class: "swap__arrow", "aria-hidden": "true" }, "→"),
+            h(
+              "div",
+              { class: "swap__port swap__port--target" },
+              String(conflict.suggestion),
+              h("span", null, "free"),
+            ),
           )
-        : h(
-            "p",
-            { class: "field__hint" },
-            "Every port Oracle tried nearby is also taken. Stop whatever is using this range, or give the project a different port in its settings.",
-          ),
+        : null,
+      h(
+        "p",
+        { class: "field__hint", style: { marginTop: "16px" } },
+        conflict.suggestion !== null
+          ? `For this run only. ${project.name} keeps port ${conflict.port} in its settings, and the new port reaches the command as PORT.`
+          : "Every port Oracle tried nearby is also taken. Stop whatever is using this range, or give the project a different port in its settings.",
+      ),
     );
 
     const actions = [
@@ -72,27 +91,31 @@ export function askAboutPort(
       }),
     ];
 
-    if (conflict.suggestion !== null) {
-      const port = conflict.suggestion;
-      actions.push(
-        button({
-          label: `Start on ${port}`,
-          variant: "primary",
-          onClick: () => {
-            settle(port);
-            closeModal();
-          },
-        }),
-      );
-    }
+    const accept =
+      conflict.suggestion === null
+        ? null
+        : button({
+            label: `Start on ${conflict.suggestion}`,
+            variant: "primary",
+            onClick: () => {
+              settle(conflict.suggestion);
+              closeModal();
+            },
+          });
+
+    if (accept) actions.push(accept);
 
     showModal({
       title: "Port already in use",
       body,
       actions,
-      width: 460,
+      width: 440,
       // Covers Escape and the backdrop, neither of which routes through a button.
       onClose: () => settle(null),
     });
+
+    // The dialog focuses its first button by default, which here would be Cancel — so
+    // Enter, the key someone reaches for to accept an offer, would decline it instead.
+    accept?.focus();
   });
 }
