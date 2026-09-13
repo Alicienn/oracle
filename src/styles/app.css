@@ -810,6 +810,11 @@ textarea.input:focus {
   padding: var(--gap-5);
 }
 
+/* A dialog that swaps its own footer leaves it empty between states. */
+.modal__foot:empty {
+  display: none;
+}
+
 .modal__foot {
   display: flex;
   justify-content: flex-end;
@@ -863,6 +868,154 @@ textarea.input:focus {
 .notice p {
   margin: 3px 0 0;
   color: var(--ink-soft);
+}
+
+/* ---------------------------------------------------------------------------
+ * Update dialog
+ * ------------------------------------------------------------------------ */
+
+/*
+ * The download and ready states.
+ *
+ * Centred on the ring, which is the only thing worth looking at while the bytes move. The
+ * block keeps a minimum height so the dialog does not resize as the line of text under it
+ * changes length — a box that breathes with every progress update is distracting in a way
+ * the progress itself is not.
+ */
+.update {
+  display: grid;
+  justify-items: center;
+  gap: var(--gap-3);
+  min-height: 168px;
+  align-content: center;
+  padding: var(--gap-3) 0;
+  text-align: center;
+}
+
+.update strong {
+  font-size: var(--text-md);
+  font-weight: 620;
+  letter-spacing: -0.015em;
+}
+
+.update__line {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  /* Tabular figures so a counting number does not shift the text around it. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+ * Progress ring
+ * ------------------------------------------------------------------------ */
+
+/*
+ * The ring that fills, then becomes a tick.
+ *
+ * Three layers on one element: a track that is always there, an arc that grows, and a tick
+ * that draws itself once the arc has closed. Only `stroke-dashoffset` and `transform`
+ * animate, both of which the compositor handles, so a slow download does not cost frames.
+ */
+.ring {
+  display: block;
+  margin: 0 auto;
+}
+
+.ring circle,
+.ring path {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.ring__track {
+  stroke: var(--line-strong);
+}
+
+.ring__arc {
+  stroke: var(--accent);
+  /* The duration is deliberately longer than a frame: chunk sizes vary wildly, and easing
+     between them is what turns a stuttering counter into a smooth sweep. */
+  transition: stroke-dashoffset 400ms var(--spring-soft), stroke 240ms linear;
+}
+
+.ring__tick {
+  stroke: var(--ok);
+  stroke-linejoin: round;
+  opacity: 0;
+}
+
+/*
+ * Nothing to measure yet: the arc becomes a short travelling dash and the ring turns.
+ *
+ * A determinate ring sitting at zero looks broken; this says the same "working" as the
+ * button spinners elsewhere.
+ */
+.ring[data-state="waiting"] {
+  animation: spinner-spin 1.1s linear infinite;
+}
+
+.ring[data-state="waiting"] .ring__arc {
+  stroke-dasharray: 40 160;
+  stroke-dashoffset: 0;
+  /* No easing while spinning, or the dash fights the rotation. */
+  transition: none;
+}
+
+/* Done: the arc goes green behind the tick, and the ring gives one small pulse. */
+.ring[data-state="done"] {
+  animation: ring-settle 520ms var(--spring);
+}
+
+.ring[data-state="done"] .ring__arc {
+  stroke: var(--ok);
+}
+
+.ring[data-state="done"] .ring__tick {
+  opacity: 1;
+  /* Delayed by the arc's own transition, so the tick is drawn into a closed ring rather
+     than over an incomplete one. */
+  animation: ring-draw 380ms var(--spring) 260ms backwards;
+}
+
+@keyframes ring-draw {
+  from {
+    stroke-dashoffset: 40;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ring-settle {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* The ring carries the state; motion is not the only thing saying so. */
+@media (prefers-reduced-motion: reduce) {
+  .ring[data-state="waiting"],
+  .ring[data-state="done"] {
+    animation: none;
+  }
+
+  /* The arc still tracks progress, it just stops easing between values. */
+  .ring__arc {
+    transition: none;
+  }
+
+  .ring[data-state="done"] .ring__tick {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
 }
 
 /*

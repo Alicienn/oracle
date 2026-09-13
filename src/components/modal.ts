@@ -8,6 +8,14 @@ interface ModalOptions {
   body: HTMLElement;
   /** Rendered right-aligned in the footer, in the order given. */
   actions?: HTMLElement[];
+  /**
+   * The footer itself, for a dialog whose buttons change while it is open.
+   *
+   * Takes the place of `actions`: a dialog that walks through states needs to own the
+   * element so it can refill it, rather than handing over a list once and losing the
+   * ability to change it.
+   */
+  footer?: HTMLElement;
   /** Called after the modal has been removed, for any reason. */
   onClose?: () => void;
   width?: number;
@@ -44,7 +52,8 @@ export function showModal(options: ModalOptions): () => void {
       ),
     ),
     h("div", { class: "modal__body" }, options.body),
-    options.actions?.length ? h("div", { class: "modal__foot" }, ...options.actions) : null,
+    options.footer ??
+      (options.actions?.length ? h("div", { class: "modal__foot" }, ...options.actions) : null),
   );
 
   // Clicking the backdrop dismisses; clicking the dialog does not, thanks to the stop above.
@@ -60,6 +69,22 @@ export function showModal(options: ModalOptions): () => void {
   first?.focus();
 
   return closeModal;
+}
+
+/**
+ * Retitles the open dialog.
+ *
+ * For a dialog that walks through states: leaving "Update available" above a progress ring
+ * would describe a moment that has passed. The accessible name is kept in step with it.
+ */
+export function setModalTitle(title: string): void {
+  if (!open) return;
+
+  const dialog = open.scrim.querySelector(".modal");
+  dialog?.setAttribute("aria-label", title);
+
+  const heading = dialog?.querySelector("h2");
+  if (heading) heading.textContent = title;
 }
 
 export function closeModal(): void {

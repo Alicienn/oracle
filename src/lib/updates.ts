@@ -51,19 +51,24 @@ export async function checkNow(): Promise<{ update: Update | null; error: string
 }
 
 /**
- * Downloads and installs an update, then restarts into it.
+ * Downloads the update and verifies it, without installing.
  *
- * `onProgress` is called as bytes arrive so a slow connection does not look like a hang.
- * The function does not return on success: the process is replaced.
+ * Separating this from the install is what makes the dialog possible: on Windows installing
+ * launches the installer and exits the app immediately, so anything meant to be shown
+ * *after* a successful update — a tick, a button — has to happen before that point. The
+ * download is also the slow half, and the only half worth a progress indicator.
+ *
+ * `onProgress` is called as bytes arrive. A server that declares no length leaves `total`
+ * null, which the caller shows as indeterminate rather than guessing.
  */
-export async function install(
+export async function download(
   update: Update,
   onProgress: (progress: Progress) => void,
 ): Promise<void> {
   let downloaded = 0;
   let total: number | null = null;
 
-  await update.downloadAndInstall((event: DownloadEvent) => {
+  await update.download((event: DownloadEvent) => {
     switch (event.event) {
       case "Started":
         total = event.data.contentLength ?? null;
@@ -78,8 +83,18 @@ export async function install(
         break;
     }
   });
+}
 
-  // The installer has already replaced the files on disk; this window is running the old
-  // build until it is restarted.
+/**
+ * Installs what was downloaded and opens the new version.
+ *
+ * Does not return on Windows: the installer is launched, this process exits, and the
+ * installer starts the new build. Elsewhere the install completes in place and the restart
+ * is ours to ask for.
+ */
+export async function installAndOpen(update: Update): Promise<void> {
+  await update.install({ restartAfterInstall: true });
+
+  // Reached only where the install did not replace the process.
   await relaunch();
 }
