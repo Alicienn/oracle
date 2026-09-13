@@ -18,9 +18,19 @@
     "core:window:allow-is-maximized",
     "core:webview:allow-set-webview-focus",
     "core:event:default",
-    "opener:allow-open-url",
     "autostart:default",
     "dialog:allow-open",
-    "core:webview:allow-internal-toggle-devtools"
+    "core:webview:allow-internal-toggle-devtools",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "http://**"
+        },
+        {
+          "url": "https://**"
+        }
+      ]
+    }
   ]
 }
