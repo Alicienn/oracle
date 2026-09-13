@@ -25,7 +25,8 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Produces `src-tauri/target/release/bundle/nsis/Oracle_0.1.0_x64-setup.exe`.
+Produces the installer under `src-tauri/target/release/bundle/nsis/`. Unsigned, and so not
+something an existing installation will accept as an update — see below.
 
 ## Releases and updating
 
@@ -37,25 +38,28 @@ because the installer replaces Oracle and anything Oracle is running has to be s
 first — the dialog names those projects before you agree. The check can be turned off in
 Settings.
 
-Cutting a release is pushing a tag; [the workflow](.github/workflows/release.yml) builds the
-installer, signs it, and publishes it:
+Cutting a release is one command:
 
 ```bash
-npm version patch   # bump src-tauri/tauri.conf.json to match
-git push --follow-tags
+npm run release                              # or: npm run release -- --notes "What changed"
 ```
 
-Two repository secrets have to exist for the build to sign:
+It builds, signs, writes the manifest the updater reads, tags the commit, and publishes the
+release with `gh`. Add `--dry-run` to do everything except tag and publish.
 
-| Secret | Value |
-|---|---|
-| `TAURI_SIGNING_PRIVATE_KEY` | Contents of the private key file |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password, empty if it has none |
+Signing is not optional — the updater refuses any package it cannot verify against the public
+key in `src-tauri/tauri.conf.json`, which is what makes an application that downloads and runs
+an installer on its own acceptable. The keypair was generated with
+`npm run tauri signer generate`; the private half lives at `~/.tauri/oracle.key`, is handed to
+the build as a *path* so its contents never reach a shell history, and is never committed.
+Set `ORACLE_SIGNING_KEY` to use another location. Losing it means no existing installation can
+ever be updated again — every user would have to install the next version by hand, so keep a
+copy somewhere safe.
 
-The keypair was generated with `npm run tauri signer generate`. The **public** half is in
-`src-tauri/tauri.conf.json` and is what the app verifies against; the private half never
-belongs in the repository. Losing it means no existing installation can be updated again —
-every user would have to install the next version by hand.
+Nothing about this requires a secret on GitHub, and nothing is required of users: the public
+key ships inside the application. [The workflow](.github/workflows/release.yml) does the same
+job on a runner for the day that is wanted instead, and is manual-only so it cannot race the
+local path; it is the only route that needs the key uploaded as a repository secret.
 
 ## Documentation
 

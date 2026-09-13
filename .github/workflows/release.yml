@@ -1,13 +1,11 @@
 # Builds the installer and publishes it as a GitHub release.
 #
-# The release is what Oracle's updater reads: `tauri-action` uploads the NSIS installer, its
-# signature, and a `latest.json` describing them. The app polls
-# `releases/latest/download/latest.json`, so whichever release is marked latest is the one
-# users are offered.
+# NOT the default path. `npm run release` does the same job from a developer machine, which
+# keeps the signing key there; this exists for the day releases should come off a runner
+# instead, and it needs the key uploaded as a repository secret first.
 #
-# Cutting a release is pushing a tag:
-#
-#   npm version patch && git push --follow-tags
+# Deliberately manual-only. A tag trigger would race `npm run release`, which pushes its own
+# tag: both would try to create the same release, and one would fail loudly for no reason.
 #
 # The tag must match the version in `src-tauri/tauri.conf.json`, or the updater will offer an
 # update that reports the version it is replacing.
@@ -15,10 +13,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
-  # Lets a release be rebuilt without moving the tag.
   workflow_dispatch:
     inputs:
       tag:
@@ -36,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -60,8 +54,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: Oracle ${{ github.event.inputs.tag || github.ref_name }}
+          tagName: ${{ github.event.inputs.tag }}
+          releaseName: Oracle ${{ github.event.inputs.tag }}
           releaseBody: |
             Installer below. An existing installation updates itself from this release.
           releaseDraft: false
