@@ -4,6 +4,12 @@ Every released version has a section here, and the release script refuses to pub
 that does not: an update that cannot say what it changed is an update nobody has a reason to
 accept. The section for the running version is what Oracle shows after it updates itself.
 
+## 0.2.1
+
+- Fixed: "Check for updates" in Settings found an update and then closed the dialog without
+  saying so, which was indistinguishable from a button that does nothing. It now reports what
+  it found in the row that was clicked.
+
 ## 0.2.0
 
 - Oracle updates itself. An available update appears as a line in the title bar rather than

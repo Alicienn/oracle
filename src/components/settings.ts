@@ -230,11 +230,12 @@ export function showSettings(): void {
         return;
       }
 
-      // Straight to the title-bar indicator, which is the one place an available update
-      // is ever shown: two routes to the same offer would be two things to keep in step.
-      updateStatus.textContent = "";
-      closeModal();
+      // The offer itself lives in the title bar — one place for it, rather than two things
+      // to keep in step — but the answer has to appear where the question was asked. This
+      // used to clear the line and close the dialog, so someone who already had the chip up
+      // from the launch check saw Settings vanish and nothing change.
       mountUpdateChip(update);
+      updateStatus.textContent = `Oracle ${update.version} is available — "Download update" is in the title bar.`;
     },
   });
 
